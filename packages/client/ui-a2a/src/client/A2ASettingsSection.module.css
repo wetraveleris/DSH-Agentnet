@@ -1,0 +1,19 @@
+.section { display: flex; flex-direction: column; gap: 18px; max-width: 760px; }
+.heading { margin: 0; color: var(--dsw-alias-label-primary); font-size: 20px; font-weight: 600; }
+.intro { margin: -8px 0 0; color: var(--dsw-alias-label-tertiary); font-size: 13px; line-height: 1.5; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.label { color: var(--dsw-alias-label-secondary); font-size: 13px; font-weight: 600; }
+.select { box-sizing: border-box; width: 100%; min-height: 36px; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-secondary); border-radius: 8px; background: var(--dsw-alias-bg-primary); color: var(--dsw-alias-label-primary); font: inherit; }
+.searchRow { display: flex; align-items: center; gap: 8px; }
+.input { box-sizing: border-box; flex: 1; min-width: 0; min-height: 36px; padding: 8px 10px; border: 1px solid var(--dsw-alias-border-secondary); border-radius: 8px; background: var(--dsw-alias-bg-primary); color: var(--dsw-alias-label-primary); font: inherit; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.button { min-height: 34px; padding: 0 12px; border: 1px solid var(--dsw-alias-border-secondary); border-radius: 8px; background: var(--dsw-alias-interactive-bg-primary); color: var(--dsw-alias-label-primary); cursor: pointer; font: inherit; }
+.button:disabled { cursor: default; opacity: .5; }
+.meta { color: var(--dsw-alias-label-tertiary); font-size: 12px; }
+.card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--dsw-alias-border-secondary); border-radius: 8px; }
+.cardTitle { color: var(--dsw-alias-label-primary); font-size: 14px; font-weight: 600; }
+.skill { padding: 8px 0; border-top: 1px solid var(--dsw-alias-border-tertiary); }
+.skillName { color: var(--dsw-alias-label-secondary); font-size: 13px; font-weight: 600; }
+.skillDescription { margin: 3px 0 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 1.4; }
+.error { color: var(--dsw-alias-label-danger); font-size: 13px; }
+.empty { color: var(--dsw-alias-label-tertiary); font-size: 13px; }

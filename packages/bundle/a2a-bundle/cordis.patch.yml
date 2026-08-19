@@ -1,0 +1,31 @@
+# Optional A2A network layer. Static peers and Registry discovery remain inert
+# until a later profile patch or environment variables configure them.
+- insert:
+    - id: a2a-client
+      name: '@deepseek-ai/dsh-a2a-client'
+      config:
+        agents: {}
+        registryUrl: !!js process.env.DSH_A2A_REGISTRY_URL
+        registryToken: !!js process.env.DSH_A2A_REGISTRY_DISCOVERY_TOKEN
+        relayAccessToken: !!js process.env.DSH_A2A_RELAY_ACCESS_TOKEN
+        maxUploadBytes: 10485760
+        requestTimeoutMs: 60000
+        allowInsecureHttp: false
+    - id: tool-a2a
+      name: '@deepseek-ai/dsh-tool-a2a'
+    - id: ui-a2a
+      name: '@deepseek-ai/dsh-client-ui-a2a'
+    - id: a2a-node
+      name: '@deepseek-ai/dsh-a2a-network'
+      config:
+        enabled: !!js process.env.DSH_A2A_AGENT_ID !== undefined
+        agentId: !!js process.env.DSH_A2A_AGENT_ID
+        relayUrl: !!js process.env.DSH_A2A_RELAY_URL
+        relayTokenRef: DSH_A2A_RELAY_TOKEN
+        registryUrl: !!js process.env.DSH_A2A_REGISTRY_URL
+        registryTokenRef: DSH_A2A_REGISTRY_TOKEN
+        provider: !!js process.env.DSH_A2A_PROVIDER
+        model: !!js process.env.DSH_A2A_MODEL
+        name: !!js process.env.DSH_A2A_AGENT_NAME ?? 'DSH A2A peer'
+        description: !!js process.env.DSH_A2A_AGENT_DESCRIPTION ?? 'A DSH peer node'
+        skills: !!js JSON.parse(process.env.DSH_A2A_SKILLS_JSON ?? '[{"id":"echo-and-inspect","name":"Echo and inspect","description":"Accepts text and reports attachment metadata.","tags":["a2a"],"inputModes":["text/plain"],"outputModes":["text/plain"]}]')

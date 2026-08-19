@@ -1,0 +1,17 @@
+{
+  "name": "@deepseek-ai/dsh-a2a-gateway",
+  "description": "Reference A2A Protocol v1.0 gateway with direct-upload extension for integration tests",
+  "version": "0.1.0-rc.5",
+  "publishConfig": { "access": "public" },
+  "repository": { "type": "git", "url": "git+https://github.com/deepseek-ai/deepseek-harness.git", "directory": "packages/a2a/a2a-gateway" },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": { ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" }, "./invariant": { "types": "./lib/types/invariant.d.ts", "default": "./lib/invariant.js" }, "./src/*": "./src/*", "./package.json": "./package.json" },
+  "files": ["lib/index.js", "lib/invariant.js", "lib/bin.js", "lib/types/**/*.d.ts"],
+  "license": "MIT",
+  "dependencies": { "@a2a-js/sdk": "1.0.1", "@deepseek-ai/dsh-a2a": "workspace:^", "express": "^5.1.0" },
+  "peerDependencies": { "@deepseek-ai/dsh-invariants": "workspace:^", "@deepseek-ai/cordis": "workspace:^" },
+  "devDependencies": { "@types/express": "^5.0.3", "@deepseek-ai/dsh-invariants": "workspace:^", "@deepseek-ai/cordis": "workspace:^" },
+  "bin": { "dsh-a2a-gateway": "lib/bin.js" }
+}
