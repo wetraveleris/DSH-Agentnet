@@ -44,6 +44,8 @@ describe('A2ASettingsSection', () => {
   it('stores credentials separately and enables the node after all settings are written', async () => {
     const set = vi.fn(async () => undefined)
     const unset = vi.fn(async () => undefined)
+    const clientSet = vi.fn(async () => undefined)
+    const clientUnset = vi.fn(async () => undefined)
     const nodeSettings = {
       getSnapshot: () => ({
         status: 'ready' as const,
@@ -53,13 +55,23 @@ describe('A2ASettingsSection', () => {
       set,
       unset,
     } as SettingsScope<Record<string, unknown>>
+    const clientSettings = {
+      getSnapshot: () => ({
+        status: 'ready' as const,
+        value: {}, base: {}, user: {}, revision: 0, writable: true, mode: 'host' as const,
+      }),
+      subscribe: () => () => undefined,
+      set: clientSet,
+      unset: clientUnset,
+    } as SettingsScope<Record<string, unknown>>
     const credentialsSet = vi.fn(async () => ({ result: { ok: true as const, value: {} } }))
     const api = {
       list: vi.fn(async () => ({ ok: true as const, value: [] })),
       search: vi.fn(), discover: vi.fn(),
     } as unknown as A2ARemoteApi
     render(<A2ASettingsSection
-      t={t} api={api} nodeSettings={nodeSettings} hostApi={{ credentials: { set: credentialsSet } as never }}
+      t={t} api={api} nodeSettings={nodeSettings} clientSettings={clientSettings}
+      hostApi={{ credentials: { set: credentialsSet } as never }}
       close={vi.fn()} useSessions={(() => { throw new Error('unused') })} useWorkspaces={(() => { throw new Error('unused') })}
     />)
     fireEvent.change(screen.getByRole('textbox', { name: '节点 ID' }), { target: { value: 'b-vision' } })
@@ -68,6 +80,8 @@ describe('A2ASettingsSection', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存并加入' }))
     await waitFor(() => { expect(set).toHaveBeenLastCalledWith('enabled', true) })
     expect(credentialsSet).toHaveBeenCalledWith({ ref: 'DSH_A2A_RELAY_TOKEN', value: 'relay-secret' })
+    expect(clientSet).toHaveBeenCalledWith('registryTokenRef', 'DSH_A2A_REGISTRY_DISCOVERY_TOKEN')
+    expect(clientSet).toHaveBeenCalledWith('relayAccessTokenRef', 'DSH_A2A_RELAY_ACCESS_TOKEN')
     expect(set.mock.calls[0]).toEqual(['enabled', false])
   })
 })
