@@ -22,11 +22,15 @@ Provider 会拒绝未知 Agent、默认非 HTTPS 地址、非法 SHA-256、超�
         uploadUrl: 'https://agent.example.com/dsh/uploads'
     registryUrl: 'https://registry.example.com/a2a-registry/'
     registryToken: !!js process.env.DSH_A2A_REGISTRY_DISCOVERY_TOKEN
+    registryTokenRef: DSH_A2A_REGISTRY_DISCOVERY_TOKEN
     relayAccessToken: !!js process.env.DSH_A2A_RELAY_ACCESS_TOKEN
+    relayAccessTokenRef: DSH_A2A_RELAY_ACCESS_TOKEN
     maxUploadBytes: 10485760
 ```
 
 私有部署可以配置请求头，但应通过 credentials capability 引用凭据，而不是把明文密钥放入 profile。`relayAccessToken` 会为通过 Registry 发现、且发布在同一私有 Relay 上的 Peer 应用共享 Bearer 请求头；Registry 响应不会返回该密钥。
+
+`registryTokenRef` 和 `relayAccessTokenRef` 让 Settings section 在每次操作时通过 `ctx.credentials` 解析 Token。部署配置中的明文 Token 优先；Settings 页面只保存引用，因此凭据轮换无需重启客户端即可生效。
 
 配置 `registryUrl` 后，`searchAgents(skill)` 会调用 `GET /v1/agents`，并缓存返回的 Endpoint 与上传 URL，供后续 `discover`、`send` 和上传操作使用。`registryToken` 是发现凭据，与 Peer 注册和心跳使用的 Registry 注册 Token 分离。Registry URL 与发现到的 Peer URL 默认必须使用 HTTPS；只有本地开发才应启用 `allowInsecureHttp`。带路径前缀的 URL 会被保留，例如 `https://host/a2a-registry/` 会映射到 `https://host/a2a-registry/v1/agents`。
 

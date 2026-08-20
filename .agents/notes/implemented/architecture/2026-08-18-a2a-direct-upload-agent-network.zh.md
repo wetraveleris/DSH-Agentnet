@@ -14,6 +14,8 @@ DSH 在 `packages/a2a/` 下提供可选的 A2A 能力组：`@deepseek-ai/dsh-a2a
 
 客户端发现 `/.well-known/agent-card.json`，通过官方 SDK 选择 Agent Card 声明的 A2A 1.0 HTTP+JSON 或 JSON-RPC 传输，发送标准 Message，并将标准 Message、Task 和 Artifact 投影为 DSH 自有的 JSON 类型。`agent-loop` 保持不变；工具消费方通过正常的能力 seam 调用 `ctx.a2a`。
 
+当 settings capability 存在时，客户端 Provider 会注册 `a2a-client` Settings namespace。Registry 发现 Token 和 Relay 访问 Token 可以配置为 credential 引用；Provider 每次操作都会解析引用，而组合配置中的明文 Token 仍是明确的部署覆盖项。Settings UI 只写入引用，因此加入网络也会同步配置首页工具，并且不会持久化密钥值。
+
 本地文件使用 URI 为 `https://deepseek.com/a2a/extensions/direct-upload/v1` 的 DSH 扩展。调用方在上限内读取原始字节，把文件名、媒体类型、字节长度和小写 SHA-256 发送给配置的远程上传端点，取得短期一次性票据，把字节直接上传到远程 Agent 的私有临时目录，然后只在 A2A 消息元数据中发送不透明的附件 ID 和完整性元数据。远程 Gateway 在写入 `0700` 目录和 `0600` 内容文件前校验 token、过期时间、长度和摘要；过期记录自动清理。
 
 Provider 默认拒绝未知 Agent ID、非 HTTPS 端点、无效摘要、超大上传、格式错误的票据和失败的 HTTP 响应。`allowInsecureHttp` 仅用于本地开发并且必须显式配置。浏览器 UI 直接使用票据 URL 上传，不会把本地路径暴露给远程 Agent。

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-18-a2a-direct-upload-agent-network.md
-2026-08-18-a2a-direct-upload-agent-network.md: 5d4338c510ba13c94e288fa1ca0c14d7c8172f67
-2026-08-18-a2a-direct-upload-agent-network.zh.md: 4529996628111b3d4f44c87fce24be29c7b609eb
+2026-08-18-a2a-direct-upload-agent-network.md: 446ccf1eddd01b14b25ce204c9b70fb685c10b0a
+2026-08-18-a2a-direct-upload-agent-network.zh.md: a6b6c0532406dcdb06714ff104e6fc174bfaaa34

@@ -20,12 +20,13 @@ export async function apply(ctx: ClientContext): Promise<void> {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-a2a: dictionaries')
   const t = ctx.locale.bind(NS)
   const nodeSettings = ctx.settingsScope.bind<Record<string, unknown>>({ namespace: 'a2a-node' })
+  const clientSettings = ctx.settingsScope.bind<Record<string, unknown>>({ namespace: 'a2a-client' })
   const hostApi = (ctx.get('connection') as ConnectionHandle).api
   ctx.inject(['remote.a2a'], (scope: ClientContext) => {
     const api = (scope.remote as unknown as { a2a: A2ARemoteApi }).a2a
     scope.slots.inject('settings.section', () => scope.slots.register({
       name: 'settings.section', id: 'a2a', order: 25, label: () => t('nav'), locale: NS,
-      inject: () => ({ api, nodeSettings, hostApi }),
+      inject: () => ({ api, nodeSettings, clientSettings, hostApi }),
     }, A2ASettingsSection))
   })
 }

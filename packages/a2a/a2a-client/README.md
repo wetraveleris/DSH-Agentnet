@@ -22,11 +22,15 @@ The provider rejects unknown Agents, non-HTTPS endpoints by default, invalid SHA
         uploadUrl: 'https://agent.example.com/dsh/uploads'
     registryUrl: 'https://registry.example.com/a2a-registry/'
     registryToken: !!js process.env.DSH_A2A_REGISTRY_DISCOVERY_TOKEN
+    registryTokenRef: DSH_A2A_REGISTRY_DISCOVERY_TOKEN
     relayAccessToken: !!js process.env.DSH_A2A_RELAY_ACCESS_TOKEN
+    relayAccessTokenRef: DSH_A2A_RELAY_ACCESS_TOKEN
     maxUploadBytes: 10485760
 ```
 
 Headers are supported for a trusted private deployment but should contain references resolved by the credentials capability rather than plaintext secrets in a profile. `relayAccessToken` applies a shared Bearer header to Registry-discovered peers published through one private Relay; it is not returned by Registry responses.
+
+`registryTokenRef` and `relayAccessTokenRef` let a live Settings section resolve those tokens from `ctx.credentials` for each operation. A literal token takes precedence for deployment composition; the Settings page stores only the references, so changing a credential takes effect without restarting the client.
 
 When `registryUrl` is configured, `searchAgents(skill)` calls `GET /v1/agents` and caches the returned endpoint and upload URL for later `discover`, `send`, and upload calls. `registryToken` is a discovery credential; it is separate from the Registry registration token used by peers for registration and heartbeats. A Registry URL and discovered peer URLs must use HTTPS unless `allowInsecureHttp` is enabled for local development. A URL with a path prefix is preserved, so `https://host/a2a-registry/` maps to `https://host/a2a-registry/v1/agents`.
 

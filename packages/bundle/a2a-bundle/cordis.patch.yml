@@ -7,7 +7,9 @@
         agents: {}
         registryUrl: !!js process.env.DSH_A2A_REGISTRY_URL
         registryToken: !!js process.env.DSH_A2A_REGISTRY_DISCOVERY_TOKEN
+        registryTokenRef: DSH_A2A_REGISTRY_DISCOVERY_TOKEN
         relayAccessToken: !!js process.env.DSH_A2A_RELAY_ACCESS_TOKEN
+        relayAccessTokenRef: DSH_A2A_RELAY_ACCESS_TOKEN
         maxUploadBytes: 10485760
         requestTimeoutMs: 60000
         allowInsecureHttp: false

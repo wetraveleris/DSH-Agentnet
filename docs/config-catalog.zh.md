@@ -26,6 +26,8 @@ export interface Config {
   readonly registryUrl?: string
   /** Bearer token for a private Registry discovery endpoint. */
   readonly registryToken?: string
+  /** Credential reference used when registryToken is not supplied. */
+  readonly registryTokenRef?: string
   /** Maximum direct upload size accepted by the local client. */
   readonly maxUploadBytes?: number
   /** Per-request timeout in milliseconds. */
@@ -34,6 +36,8 @@ export interface Config {
   readonly allowInsecureHttp?: boolean
   /** Shared access token for peers published through one private Relay. */
   readonly relayAccessToken?: string
+  /** Credential reference used when relayAccessToken is not supplied. */
+  readonly relayAccessTokenRef?: string
 }
 
 /** A configured remote Agent endpoint. */
@@ -47,7 +51,7 @@ export interface A2AConfiguredAgent {
 }
 ```
 
-来源：[`packages/a2a/a2a-client/src/index.ts:40`](../packages/a2a/a2a-client/src/index.ts)
+来源：[`packages/a2a/a2a-client/src/index.ts:42`](../packages/a2a/a2a-client/src/index.ts)
 
 <a id="deepseek-aidsh-a2a-network"></a>
 

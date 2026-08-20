@@ -8,7 +8,7 @@ import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import type { IApiClient } from '@deepseek-ai/dsh-api-remotes/client'
 import css from './A2ASettingsSection.module.css'
 
-interface Injected { api: A2ARemoteApi; nodeSettings?: SettingsScope<Record<string, unknown>>; hostApi?: Pick<IApiClient, 'credentials'> }
+interface Injected { api: A2ARemoteApi; nodeSettings?: SettingsScope<Record<string, unknown>>; clientSettings?: SettingsScope<Record<string, unknown>>; hostApi?: Pick<IApiClient, 'credentials'> }
 type Props = PropsRuntime<'settings.section'> & PropsLocale<'a2a'> & InjectFace<Injected>
 
 function errorOf<T>(result: A2ARemoteResult<T>): string | undefined {
@@ -16,7 +16,7 @@ function errorOf<T>(result: A2ARemoteResult<T>): string | undefined {
 }
 
 /** Render joined Agent discovery and capability metadata. */
-export function A2ASettingsSection({ t, api, nodeSettings, hostApi }: Props) {
+export function A2ASettingsSection({ t, api, nodeSettings, clientSettings, hostApi }: Props) {
   const [agents, setAgents] = useState<readonly A2AAgentView[]>([])
   const [agentId, setAgentId] = useState('')
   const [skill, setSkill] = useState('')
@@ -24,9 +24,12 @@ export function A2ASettingsSection({ t, api, nodeSettings, hostApi }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const [node, setNode] = useState<Record<string, unknown>>(() => nodeSettings?.getSnapshot().value ?? {})
+  const [client, setClient] = useState<Record<string, unknown>>(() => clientSettings?.getSnapshot().value ?? {})
   const [saving, setSaving] = useState(false)
   const [relaySecret, setRelaySecret] = useState('')
   const [registrySecret, setRegistrySecret] = useState('')
+  const [relayAccessSecret, setRelayAccessSecret] = useState('')
+  const [registryDiscoverySecret, setRegistryDiscoverySecret] = useState('')
   const selected = useMemo(() => agents.find(agent => String(agent.id) === agentId), [agentId, agents])
 
   useEffect(() => {
@@ -46,8 +49,19 @@ export function A2ASettingsSection({ t, api, nodeSettings, hostApi }: Props) {
     return nodeSettings.subscribe(sync)
   }, [nodeSettings])
 
+  useEffect(() => {
+    if (clientSettings === undefined) return
+    const sync = () => { setClient(clientSettings.getSnapshot().value ?? {}) }
+    sync()
+    return clientSettings.subscribe(sync)
+  }, [clientSettings])
+
   const field = (key: string): string => {
-    const value = node[key]
+    const value = key === 'relayAccessTokenRef'
+      ? client.relayAccessTokenRef
+      : key === 'registryDiscoveryTokenRef'
+        ? client.registryTokenRef
+        : node[key]
     return typeof value === 'string' ? value : ''
   }
   const saveNode = async () => {
@@ -61,12 +75,22 @@ export function A2ASettingsSection({ t, api, nodeSettings, hostApi }: Props) {
       if (!Array.isArray(parsedSkills)) throw new Error(t('invalidSkills'))
       const relayTokenRef = field('relayTokenRef').trim() || 'DSH_A2A_RELAY_TOKEN'
       const registryTokenRef = field('registryTokenRef').trim() || 'DSH_A2A_REGISTRY_TOKEN'
+      const relayAccessTokenRef = field('relayAccessTokenRef').trim() || 'DSH_A2A_RELAY_ACCESS_TOKEN'
+      const registryDiscoveryTokenRef = field('registryDiscoveryTokenRef').trim() || 'DSH_A2A_REGISTRY_DISCOVERY_TOKEN'
       if (relaySecret !== '' && hostApi !== undefined) {
         const saved = await hostApi.credentials.set({ ref: relayTokenRef, value: relaySecret })
         if (!saved.result.ok) throw new Error(saved.result.error.message)
       }
       if (registrySecret !== '' && hostApi !== undefined) {
         const saved = await hostApi.credentials.set({ ref: registryTokenRef, value: registrySecret })
+        if (!saved.result.ok) throw new Error(saved.result.error.message)
+      }
+      if (relayAccessSecret !== '' && hostApi !== undefined) {
+        const saved = await hostApi.credentials.set({ ref: relayAccessTokenRef, value: relayAccessSecret })
+        if (!saved.result.ok) throw new Error(saved.result.error.message)
+      }
+      if (registryDiscoverySecret !== '' && hostApi !== undefined) {
+        const saved = await hostApi.credentials.set({ ref: registryDiscoveryTokenRef, value: registryDiscoverySecret })
         if (!saved.result.ok) throw new Error(saved.result.error.message)
       }
       await nodeSettings.set('enabled', false)
@@ -76,13 +100,19 @@ export function A2ASettingsSection({ t, api, nodeSettings, hostApi }: Props) {
         description: field('description').trim() || 'A DSH peer node',
         skills: parsedSkills,
       })) await nodeSettings.set(key, value)
+      if (clientSettings !== undefined) {
+        if (field('registryUrl').trim() === '') await clientSettings.unset('registryUrl')
+        else await clientSettings.set('registryUrl', field('registryUrl').trim())
+        await clientSettings.set('registryTokenRef', registryDiscoveryTokenRef)
+        await clientSettings.set('relayAccessTokenRef', relayAccessTokenRef)
+      }
       for (const key of ['registryUrl', 'provider', 'model'] as const) {
         const value = field(key).trim()
         if (value === '') await nodeSettings.unset(key)
         else await nodeSettings.set(key, value)
       }
       await nodeSettings.set('enabled', true)
-      setRelaySecret(''); setRegistrySecret('')
+      setRelaySecret(''); setRegistrySecret(''); setRelayAccessSecret(''); setRegistryDiscoverySecret('')
     } catch (reason: unknown) { setError(reason instanceof Error ? reason.message : String(reason)) }
     finally { setSaving(false) }
   }
@@ -119,12 +149,14 @@ export function A2ASettingsSection({ t, api, nodeSettings, hostApi }: Props) {
       {nodeSettings !== undefined && <div className={css.card}>
         <div className={css.cardTitle}>{t('joinTitle')}</div>
         <p className={css.meta}>{t('joinIntro')}</p>
-        {(['agentId', 'relayUrl', 'relayTokenRef', 'registryUrl', 'registryTokenRef', 'provider', 'model', 'name', 'description', 'skills'] as const).map(key => (
-          <label className={css.field} key={key}><span className={css.label}>{t(key)}</span><input className={css.input} value={key === 'skills' && typeof node[key] !== 'string' ? JSON.stringify(node[key] ?? []) : field(key)} onChange={(event) => { setNode(current => ({ ...current, [key]: event.target.value })) }} /></label>
+        {(['agentId', 'relayUrl', 'relayTokenRef', 'registryUrl', 'registryTokenRef', 'registryDiscoveryTokenRef', 'relayAccessTokenRef', 'provider', 'model', 'name', 'description', 'skills'] as const).map(key => (
+          <label className={css.field} key={key}><span className={css.label}>{t(key)}</span><input className={css.input} value={key === 'skills' && typeof node[key] !== 'string' ? JSON.stringify(node[key] ?? []) : field(key)} onChange={(event) => { if (key === 'relayAccessTokenRef') setClient(current => ({ ...current, relayAccessTokenRef: event.target.value })); else if (key === 'registryDiscoveryTokenRef') setClient(current => ({ ...current, registryTokenRef: event.target.value })); else setNode(current => ({ ...current, [key]: event.target.value })) }} /></label>
         ))}
         {hostApi !== undefined && <>
           <label className={css.field}><span className={css.label}>{t('relaySecret')}</span><input className={css.input} type="password" autoComplete="new-password" value={relaySecret} onChange={(event) => { setRelaySecret(event.target.value) }} /></label>
           <label className={css.field}><span className={css.label}>{t('registrySecret')}</span><input className={css.input} type="password" autoComplete="new-password" value={registrySecret} onChange={(event) => { setRegistrySecret(event.target.value) }} /></label>
+          <label className={css.field}><span className={css.label}>{t('relayAccessSecret')}</span><input className={css.input} type="password" autoComplete="new-password" value={relayAccessSecret} onChange={(event) => { setRelayAccessSecret(event.target.value) }} /></label>
+          <label className={css.field}><span className={css.label}>{t('registryDiscoverySecret')}</span><input className={css.input} type="password" autoComplete="new-password" value={registryDiscoverySecret} onChange={(event) => { setRegistryDiscoverySecret(event.target.value) }} /></label>
         </>}
         <div className={css.row}>
           <button type="button" className={css.button} disabled={saving} onClick={() => { void saveNode() }}>{saving ? t('saving') : t('join')}</button>

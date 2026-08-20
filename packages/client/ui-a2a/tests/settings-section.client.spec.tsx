@@ -64,7 +64,7 @@ describe('A2ASettingsSection', () => {
     />)
     fireEvent.change(screen.getByRole('textbox', { name: '节点 ID' }), { target: { value: 'b-vision' } })
     fireEvent.change(screen.getByRole('textbox', { name: 'Relay URL' }), { target: { value: 'https://agents.example.com' } })
-    fireEvent.change(screen.getByLabelText('Relay Token（留空则保留已有值）'), { target: { value: 'relay-secret' } })
+    fireEvent.change(screen.getByLabelText('Relay 加入 Token（留空则保留已有值）'), { target: { value: 'relay-secret' } })
     fireEvent.click(screen.getByRole('button', { name: '保存并加入' }))
     await waitFor(() => { expect(set).toHaveBeenLastCalledWith('enabled', true) })
     expect(credentialsSet).toHaveBeenCalledWith({ ref: 'DSH_A2A_RELAY_TOKEN', value: 'relay-secret' })

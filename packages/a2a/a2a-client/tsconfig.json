@@ -6,6 +6,8 @@
     { "path": "../../../vendor/cordis" },
     { "path": "../../../vendor/schemastery" },
     { "path": "../../a2a/a2a" },
+    { "path": "../../credentials/credentials" },
+    { "path": "../../settings/settings" },
     { "path": "../../typert/protocol" },
     { "path": "../../runtime-diagnostics/invariants" }
   ]

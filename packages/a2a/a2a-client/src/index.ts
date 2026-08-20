@@ -4,6 +4,8 @@ import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import {
   A2A_DIRECT_UPLOAD_EXTENSION,
   type A2AAgentCardView,
@@ -44,6 +46,8 @@ export interface Config {
   readonly registryUrl?: string
   /** Bearer token for a private Registry discovery endpoint. */
   readonly registryToken?: string
+  /** Credential reference used when registryToken is not supplied. */
+  readonly registryTokenRef?: string
   /** Maximum direct upload size accepted by the local client. */
   readonly maxUploadBytes?: number
   /** Per-request timeout in milliseconds. */
@@ -52,6 +56,8 @@ export interface Config {
   readonly allowInsecureHttp?: boolean
   /** Shared access token for peers published through one private Relay. */
   readonly relayAccessToken?: string
+  /** Credential reference used when relayAccessToken is not supplied. */
+  readonly relayAccessTokenRef?: string
 }
 
 const DEFAULT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -68,13 +74,29 @@ export const Config: z<Config> = z.object({
   agents: z.dict(AgentConfig).default({}),
   registryUrl: z.string(),
   registryToken: z.string(),
+  registryTokenRef: z.string(),
   maxUploadBytes: z.number().step(1).min(1).default(DEFAULT_MAX_UPLOAD_BYTES),
   requestTimeoutMs: z.number().step(1).min(1).default(DEFAULT_REQUEST_TIMEOUT_MS),
   allowInsecureHttp: z.boolean().default(false),
   relayAccessToken: z.string(),
+  relayAccessTokenRef: z.string(),
 })
 
-type ResolvedConfig = Required<Pick<Config, 'maxUploadBytes' | 'requestTimeoutMs' | 'allowInsecureHttp'>> & Pick<Config, 'agents' | 'registryUrl' | 'registryToken' | 'relayAccessToken'>
+type ResolvedConfig = Required<Pick<Config, 'maxUploadBytes' | 'requestTimeoutMs' | 'allowInsecureHttp'>> & Pick<Config, 'agents' | 'registryUrl' | 'registryToken' | 'registryTokenRef' | 'relayAccessToken' | 'relayAccessTokenRef'>
+
+function resolveConfig(config: Config): ResolvedConfig {
+  return {
+    agents: config.agents,
+    ...(config.registryUrl === undefined ? {} : { registryUrl: config.registryUrl }),
+    ...(config.registryToken === undefined ? {} : { registryToken: config.registryToken }),
+    ...(config.registryTokenRef === undefined ? {} : { registryTokenRef: config.registryTokenRef }),
+    maxUploadBytes: config.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES,
+    requestTimeoutMs: config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    allowInsecureHttp: config.allowInsecureHttp ?? false,
+    ...(config.relayAccessToken === undefined ? {} : { relayAccessToken: config.relayAccessToken }),
+    ...(config.relayAccessTokenRef === undefined ? {} : { relayAccessTokenRef: config.relayAccessTokenRef }),
+  }
+}
 
 function agentId(value: string): A2AAgentId {
   return value as A2AAgentId
@@ -210,44 +232,58 @@ export class A2AClientService extends TypertRemoteService implements A2AService 
   static inject = []
   static Config = Config
 
-  private readonly resolved: ResolvedConfig
+  private readonly context: Context
+  private current: () => Config
   private readonly cards = new Map<string, Promise<AgentCard>>()
   private readonly registryAgents = new Map<string, A2AConfiguredAgent>()
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'a2a')
-    this.resolved = {
-      agents: config.agents,
-      ...(config.registryUrl === undefined ? {} : { registryUrl: config.registryUrl }),
-      ...(config.registryToken === undefined ? {} : { registryToken: config.registryToken }),
-      maxUploadBytes: config.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES,
-      requestTimeoutMs: config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      allowInsecureHttp: config.allowInsecureHttp ?? false,
-      ...(config.relayAccessToken === undefined ? {} : { relayAccessToken: config.relayAccessToken }),
-    }
-    if (this.resolved.registryUrl !== undefined) directoryUrl(this.resolved.registryUrl, this.resolved.allowInsecureHttp, 'registryUrl')
-    for (const [id, value] of Object.entries(this.resolved.agents)) {
+    this.context = ctx
+    this.current = () => config
+    const resolved = resolveConfig(config)
+    if (resolved.registryUrl !== undefined) directoryUrl(resolved.registryUrl, resolved.allowInsecureHttp, 'registryUrl')
+    for (const [id, value] of Object.entries(resolved.agents)) {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error(`a2a-client: invalid Agent id ${JSON.stringify(id)}`)
-      assertUrl(value.endpoint, this.resolved.allowInsecureHttp, `agents.${id}.endpoint`)
-      if (value.uploadUrl !== undefined) assertUrl(value.uploadUrl, this.resolved.allowInsecureHttp, `agents.${id}.uploadUrl`)
+      assertUrl(value.endpoint, resolved.allowInsecureHttp, `agents.${id}.endpoint`)
+      if (value.uploadUrl !== undefined) assertUrl(value.uploadUrl, resolved.allowInsecureHttp, `agents.${id}.uploadUrl`)
     }
+    // The client is also used as a standalone service in tests and SDK hosts
+    // that do not mount the optional settings provider.
+    if (ctx.get('settings') !== undefined) installSettingsSection(ctx, settingsNamespace('a2a-client'), Config, config, {
+      setSource: (source) => { this.current = source },
+      onChange: () => { this.cards.clear(); this.registryAgents.clear() },
+    })
   }
 
-  private configFor(id: A2AAgentId): A2AConfiguredAgent {
-    const value = this.resolved.agents[String(id)] ?? this.registryAgents.get(String(id))
+  private get resolved(): ResolvedConfig { return resolveConfig(this.current()) }
+
+  private async token(literal: string | undefined, ref: string | undefined): Promise<string | undefined> {
+    if (literal !== undefined) return literal
+    if (ref === undefined) return undefined
+    const credentials = this.context.get('credentials')
+    return credentials === undefined ? undefined : (await credentials.resolve(credentialRef(ref)))?.value
+  }
+
+  private async configFor(id: A2AAgentId): Promise<A2AConfiguredAgent> {
+    const resolved = this.resolved
+    const value = resolved.agents[String(id)] ?? this.registryAgents.get(String(id))
     if (value === undefined) throw new Error(`a2a-client: unknown Agent ${String(id)}; discover it from the Registry first`)
-    if (this.resolved.relayAccessToken === undefined
+    const relayAccessToken = await this.token(resolved.relayAccessToken, resolved.relayAccessTokenRef)
+    if (relayAccessToken === undefined
       || Object.keys(value.headers ?? {}).some(name => name.toLowerCase() === 'authorization')) return value
-    return { ...value, headers: { ...value.headers, authorization: `Bearer ${this.resolved.relayAccessToken}` } }
+    return { ...value, headers: { ...value.headers, authorization: `Bearer ${relayAccessToken}` } }
   }
 
   /** Discover equal peers from the configured public Registry. */
   async searchAgents(skill?: string, signal?: AbortSignal): Promise<readonly A2AAgentView[]> {
-    if (this.resolved.registryUrl === undefined) throw new Error('a2a-client: registryUrl is not configured')
-    const url = new URL('v1/agents', directoryUrl(this.resolved.registryUrl, this.resolved.allowInsecureHttp, 'registryUrl'))
+    const resolved = this.resolved
+    if (resolved.registryUrl === undefined) throw new Error('a2a-client: registryUrl is not configured')
+    const url = new URL('v1/agents', directoryUrl(resolved.registryUrl, resolved.allowInsecureHttp, 'registryUrl'))
     if (skill !== undefined) url.searchParams.set('skill', skill)
-    const headers = this.resolved.registryToken === undefined ? {} : { authorization: `Bearer ${this.resolved.registryToken}` }
-    const response = await fetch(url, { headers, signal: timeoutSignal(signal, this.resolved.requestTimeoutMs) })
+    const registryToken = await this.token(resolved.registryToken, resolved.registryTokenRef)
+    const headers = registryToken === undefined ? {} : { authorization: `Bearer ${registryToken}` }
+    const response = await fetch(url, { headers, signal: timeoutSignal(signal, resolved.requestTimeoutMs) })
     if (!response.ok) throw new Error(`a2a-client: registry discovery failed with HTTP ${response.status}`)
     const body: unknown = await response.json()
     const records = typeof body === 'object' && body !== null && 'agents' in body ? body.agents : undefined
@@ -262,21 +298,20 @@ export class A2AClientService extends TypertRemoteService implements A2AService 
         throw new Error('a2a-client: registry returned invalid Agent record')
       }
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(discoveredId)) throw new Error('a2a-client: registry returned invalid Agent id')
-      assertUrl(endpoint, this.resolved.allowInsecureHttp, `Registry Agent ${discoveredId} endpoint`)
+      assertUrl(endpoint, resolved.allowInsecureHttp, `Registry Agent ${discoveredId} endpoint`)
       if (uploadUrl !== undefined) {
-        assertUrl(uploadUrl, this.resolved.allowInsecureHttp, `Registry Agent ${discoveredId} uploadUrl`)
+        assertUrl(uploadUrl, resolved.allowInsecureHttp, `Registry Agent ${discoveredId} uploadUrl`)
       }
       this.registryAgents.set(discoveredId, {
         endpoint,
         ...(uploadUrl === undefined ? {} : { uploadUrl }),
-        ...(this.resolved.relayAccessToken === undefined ? {} : { headers: { authorization: `Bearer ${this.resolved.relayAccessToken}` } }),
       })
       return Object.freeze({ id: agentId(discoveredId), endpoint, directUpload: uploadUrl !== undefined })
     })
   }
 
   private async clientFor(id: A2AAgentId, signal?: AbortSignal) {
-    const config = this.configFor(id)
+    const config = await this.configFor(id)
     let card = this.cards.get(String(id))
     if (card === undefined) {
       const fetchImpl = fetchWithHeaders(config.headers, this.resolved.requestTimeoutMs, signal)
@@ -339,7 +374,7 @@ export class A2AClientService extends TypertRemoteService implements A2AService 
 
   @Remote('prepareUpload')
   async prepareUpload(request: A2APrepareUploadRequest, signal?: AbortSignal): Promise<A2AUploadTicket> {
-    const config = this.configFor(request.agentId)
+    const config = await this.configFor(request.agentId)
     if (config.uploadUrl === undefined) throw new Error(`a2a-client: Agent ${String(request.agentId)} does not advertise direct upload`)
     if (!Number.isSafeInteger(request.byteLength) || request.byteLength < 0 || request.byteLength > this.resolved.maxUploadBytes) {
       throw new Error(`a2a-client: upload exceeds maxUploadBytes (${this.resolved.maxUploadBytes})`)
@@ -387,7 +422,7 @@ export class A2AClientService extends TypertRemoteService implements A2AService 
     if (bytes.byteLength > this.resolved.maxUploadBytes) throw new Error('a2a-client: upload exceeds maxUploadBytes')
     const digest = createHash('sha256').update(bytes).digest('hex')
     if (digest !== ticket.sha256) throw new Error('a2a-client: upload SHA-256 does not match the ticket')
-    const config = this.configFor(ticket.agentId)
+    const config = await this.configFor(ticket.agentId)
     const response = await fetch(ticket.uploadUrl, {
       method: 'PUT',
       headers: {

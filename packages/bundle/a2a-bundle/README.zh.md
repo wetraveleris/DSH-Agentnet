@@ -17,6 +17,8 @@ dsh:
   config:
     registryUrl: 'https://registry.example.com/a2a-registry/'
     registryToken: !!js process.env.DSH_A2A_REGISTRY_DISCOVERY_TOKEN
+    registryTokenRef: DSH_A2A_REGISTRY_DISCOVERY_TOKEN
+    relayAccessTokenRef: DSH_A2A_RELAY_ACCESS_TOKEN
     agents:
       lab:
         endpoint: 'https://agent.example.com'
