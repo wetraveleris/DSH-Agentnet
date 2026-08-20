@@ -20,7 +20,7 @@ DSH 在 `packages/a2a/` 下提供可选的 A2A 能力组：`@deepseek-ai/dsh-a2a
 
 Provider 默认拒绝未知 Agent ID、非 HTTPS 端点、无效摘要、超大上传、格式错误的票据和失败的 HTTP 响应。`allowInsecureHttp` 仅用于本地开发并且必须显式配置。浏览器 UI 直接使用票据 URL 上传，不会把本地路径暴露给远程 Agent。
 
-平等 Peer 使用出站 WebSocket 隧道：节点携带 join token 打开 `/v1/tunnel`，Relay 把 `/agents/{agentId}/...` 请求转发到隧道，节点只代理到自己的回环 Gateway。隧道断开后使用有界指数延迟重连；Relay 不执行节点代码。DSH executor 会创建本机 Agent，把入站指令和已校验的图片引用作为普通 user message 写入，等待整个 Agent idle，返回文本 Artifact 前释放该 Agent。
+平等 Peer 使用出站 WebSocket 隧道：节点携带 join token 打开 `/v1/tunnel`，Relay 把 `/agents/{agentId}/...` 请求转发到隧道，节点只代理到自己的回环 Gateway。隧道断开后使用有界指数延迟重连；Relay 不执行节点代码。Cordis 节点插件要求凭据服务，因此首次 Settings 同步只会在凭据引用可解析后运行。DSH executor 会创建本机 Agent，把入站指令和已校验的图片引用作为普通 user message 写入，等待整个 Agent idle，返回文本 Artifact 前释放该 Agent。
 
 ## 曾考虑的替代方案
 

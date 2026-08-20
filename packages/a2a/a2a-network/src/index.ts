@@ -27,7 +27,7 @@ export const Config: z<DshNodePluginConfig> = z.object({
 }) as unknown as z<DshNodePluginConfig>
 
 /** Required core services for the DSH-backed node. */
-export const inject = ['agents', 'attachments']
+export const inject = ['agents', 'attachments', 'credentials']
 
 /** Mount an outbound A2A node through the DSH Agent Loop.
  * @param ctx - Cordis context owning the node.

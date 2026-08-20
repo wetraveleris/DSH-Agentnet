@@ -35,7 +35,7 @@ Relay 加入 Token、Relay 访问 Token、Registry 注册 Token 和 Registry 发
 
 ## Cordis 组合
 
-在 Agent Loop、附件存储和支持视觉的模型 Provider 都已加载后，将本包挂载到完整 DSH 组合中。显式提供 `provider` 和 `model` 时插件使用它们，否则读取 `ctx.agentDefaultModel`。模型凭据只保留在节点本机。独立 CLI 仍是 echo/参考进程；本地模型执行应使用 Cordis 插件。
+在 Agent Loop、附件存储、凭据和支持视觉的模型 Provider 都已加载后，将本包挂载到完整 DSH 组合中。节点插件要求 `ctx.credentials`，因此首次 Settings 同步不会在凭据引用可解析前运行。显式提供 `provider` 和 `model` 时插件使用它们，否则读取 `ctx.agentDefaultModel`。模型凭据只保留在节点本机。独立 CLI 仍是 echo/参考进程；本地模型执行应使用 Cordis 插件。
 
 ## 模型体验
 

@@ -55,7 +55,7 @@ Source: [`packages/a2a/a2a-client/src/index.ts:42`](../packages/a2a/a2a-client/s
 
 ## `@deepseek-ai/dsh-a2a-network`
 
-Requires: `agents` · `attachments`
+Requires: `agents` · `attachments` · `credentials`
 
 ```ts config-catalog
 /** Configuration for the DSH-backed node plugin. */

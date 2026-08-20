@@ -4,8 +4,13 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { createDshTaskExecutor } from '../src/dsh-executor.ts'
+import { inject } from '../src/index.ts'
 
 describe('DSH A2A executor', () => {
+  it('waits for credentials before the node performs its initial sync', () => {
+    expect(inject).toContain('credentials')
+  })
+
   it('submits remote instruction and images to the local Agent Loop', async () => {
     const path = join(tmpdir(), `dsh-a2a-executor-${crypto.randomUUID()}.png`)
     const image = Buffer.from('png-fixture')

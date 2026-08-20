@@ -20,7 +20,7 @@ Local files use a DSH extension identified by `https://deepseek.com/a2a/extensio
 
 The provider rejects unknown Agent ids, non-HTTPS endpoints by default, invalid digests, oversized uploads, malformed tickets, and failed HTTP responses. `allowInsecureHttp` is an explicit local-development setting. Browser UI uploads use the ticket URL directly and never expose local paths to the remote Agent.
 
-Equal peers use an outbound WebSocket tunnel: the node opens `/v1/tunnel` with a join token, the Relay forwards `/agents/{agentId}/...` requests to that tunnel, and the node proxies only to its loopback Gateway. Tunnel reconnect uses bounded exponential delay; a Relay never executes node code. The DSH-backed node executor creates a fresh local Agent, appends the inbound instruction and validated image references as a normal user message, waits for whole-agent idle, and disposes that Agent before returning the text artifact.
+Equal peers use an outbound WebSocket tunnel: the node opens `/v1/tunnel` with a join token, the Relay forwards `/agents/{agentId}/...` requests to that tunnel, and the node proxies only to its loopback Gateway. Tunnel reconnect uses bounded exponential delay; a Relay never executes node code. The Cordis node plugin requires the credentials service, so its initial settings sync runs only after credential references can resolve. The DSH-backed node executor creates a fresh local Agent, appends the inbound instruction and validated image references as a normal user message, waits for whole-agent idle, and disposes that Agent before returning the text artifact.
 
 ## Alternatives considered
 

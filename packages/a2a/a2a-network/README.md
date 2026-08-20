@@ -35,7 +35,7 @@ Keep the Relay join token, Relay access token, Registry registration token, and 
 
 ## Cordis composition
 
-Mount the package in a full DSH composition after the Agent Loop, attachment store, and a vision-capable model provider are present. The plugin reads `provider` and `model` when supplied; otherwise it uses `ctx.agentDefaultModel`. Model credentials remain on the node. The standalone CLI remains an echo/reference process; use the Cordis plugin for local model execution.
+Mount the package in a full DSH composition after the Agent Loop, attachment store, credentials, and a vision-capable model provider are present. The node plugin requires `ctx.credentials`, so its initial settings sync cannot run before credential references are resolvable. The plugin reads `provider` and `model` when supplied; otherwise it uses `ctx.agentDefaultModel`. Model credentials remain on the node. The standalone CLI remains an echo/reference process; use the Cordis plugin for local model execution.
 
 ## Model Experience
 
