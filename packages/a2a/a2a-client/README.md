@@ -18,8 +18,9 @@ The provider rejects unknown Agents, non-HTTPS endpoints by default, invalid SHA
   config:
     agents:
       research:
-        endpoint: 'https://agent.example.com'
-        uploadUrl: 'https://agent.example.com/dsh/uploads'
+        endpoint: 'https://relay.example.com/agents/research'
+        cardUrl: 'https://relay.example.com/agents/research/.well-known/agent-card.json'
+        uploadUrl: 'https://relay.example.com/agents/research/dsh/uploads'
     registryUrl: 'https://registry.example.com/a2a-registry/'
     registryToken: !!js process.env.DSH_A2A_REGISTRY_DISCOVERY_TOKEN
     registryTokenRef: DSH_A2A_REGISTRY_DISCOVERY_TOKEN
@@ -32,7 +33,7 @@ Headers are supported for a trusted private deployment but should contain refere
 
 `registryTokenRef` and `relayAccessTokenRef` let a live Settings section resolve those tokens from `ctx.credentials` for each operation. A literal token takes precedence for deployment composition; the Settings page stores only the references, so changing a credential takes effect without restarting the client.
 
-When `registryUrl` is configured, `searchAgents(skill)` calls `GET /v1/agents` and caches the returned endpoint and upload URL for later `discover`, `send`, and upload calls. `registryToken` is a discovery credential; it is separate from the Registry registration token used by peers for registration and heartbeats. A Registry URL and discovered peer URLs must use HTTPS unless `allowInsecureHttp` is enabled for local development. A URL with a path prefix is preserved, so `https://host/a2a-registry/` maps to `https://host/a2a-registry/v1/agents`.
+When `registryUrl` is configured, `searchAgents(skill)` calls `GET /v1/agents` and caches each returned Card, task, and upload URL for later `discover`, `send`, and upload calls. The client fetches the Registry's explicit `cardUrl`; a static Agent without `cardUrl` derives `/.well-known/agent-card.json` beneath its complete endpoint path. `registryToken` is a discovery credential; it is separate from the Registry registration token used by peers for registration and heartbeats. A Registry URL and discovered peer URLs must use HTTPS unless `allowInsecureHttp` is enabled for local development. URL path prefixes are preserved.
 
 ## Model Experience
 

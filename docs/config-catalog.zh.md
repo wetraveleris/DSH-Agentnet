@@ -44,6 +44,8 @@ export interface Config {
 export interface A2AConfiguredAgent {
   /** HTTPS base URL that serves the peer's standard Agent Card. */
   readonly endpoint: string
+  /** Optional explicit standard Agent Card URL returned by the Registry. */
+  readonly cardUrl?: string
   /** Optional HTTPS endpoint that reserves direct-upload tickets. */
   readonly uploadUrl?: string
   /** Optional transport headers for a trusted private deployment. */
@@ -51,7 +53,7 @@ export interface A2AConfiguredAgent {
 }
 ```
 
-来源：[`packages/a2a/a2a-client/src/index.ts:42`](../packages/a2a/a2a-client/src/index.ts)
+来源：[`packages/a2a/a2a-client/src/index.ts:44`](../packages/a2a/a2a-client/src/index.ts)
 
 <a id="deepseek-aidsh-a2a-network"></a>
 

@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import { A2AClientService } from '@deepseek-ai/dsh-a2a-client'
 import { startNode } from '../src/node.ts'
 import { startRelay } from '../src/relay.ts'
 
@@ -49,6 +51,68 @@ describe('A2A public node network', () => {
       expect(result.status).toBe(200)
       await expect(result.json()).resolves.toMatchObject({ status: { state: 'TASK_STATE_COMPLETED' }, artifacts: [{ parts: [{ text: 'B executed describe this image on photo.png:image/png' }] }] })
     } finally {
+      await node.close()
+      await relay.close()
+    }
+  })
+
+  it('supports the official SDK client through the public Relay', async () => {
+    const relay = await startRelay({ publicUrl: 'http://127.0.0.1', host: '127.0.0.1', port: 0, joinToken: TOKEN })
+    const node = await startNode({
+      agentId: 'sdk-peer',
+      relayUrl: relay.publicUrl,
+      relayToken: TOKEN,
+      gateway: {
+        name: 'SDK peer',
+        description: 'Official SDK integration peer',
+        skills: [{ id: 'image-analysis', name: 'Image analysis', description: 'Analyzes an uploaded image.', inputModes: ['image/png'], outputModes: ['text/plain'] }],
+        executor: async ({ instruction, attachments }) => `SDK executed ${instruction} on ${attachments.map(item => item.name).join(',')}`,
+      },
+    })
+    const context = new Context()
+    try {
+      const client = new A2AClientService(context, {
+        agents: {
+          'sdk-peer': {
+            endpoint: `${relay.publicUrl}/agents/sdk-peer`,
+            cardUrl: `${relay.publicUrl}/agents/sdk-peer/.well-known/agent-card.json`,
+            uploadUrl: `${relay.publicUrl}/agents/sdk-peer/dsh/uploads`,
+          },
+        },
+        allowInsecureHttp: true,
+        requestTimeoutMs: 5_000,
+        maxUploadBytes: 1024,
+      })
+      await expect(client.discover('sdk-peer' as never)).resolves.toMatchObject({ name: 'SDK peer', skills: [{ id: 'image-analysis' }] })
+
+      const bytes = new TextEncoder().encode('sdk-image')
+      const ticket = await client.prepareUpload({
+        agentId: 'sdk-peer' as never,
+        name: 'photo.png',
+        mediaType: 'image/png',
+        byteLength: bytes.byteLength,
+        sha256: createHash('sha256').update(bytes).digest('hex') as never,
+      })
+      await client.upload(ticket, bytes)
+      const initial = await client.send({
+        agentId: 'sdk-peer' as never,
+        prompt: 'describe this image',
+        attachments: [{
+          attachmentId: ticket.attachmentId,
+          name: ticket.name,
+          mediaType: ticket.mediaType,
+          byteLength: ticket.byteLength,
+          sha256: ticket.sha256,
+        }],
+      })
+      expect(initial.kind).toBe('task')
+      const taskId = initial.taskId
+      if (taskId === undefined) throw new Error('SDK did not return a task id')
+      const result = await client.getTask({ agentId: 'sdk-peer' as never, taskId })
+      expect(result.state).toBe('TASK_STATE_COMPLETED')
+      expect(result.text).toContain('SDK executed describe this image on photo.png')
+    } finally {
+      await context.fiber.dispose()
       await node.close()
       await relay.close()
     }

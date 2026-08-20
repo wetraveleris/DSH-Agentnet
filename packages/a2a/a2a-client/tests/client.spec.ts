@@ -85,10 +85,10 @@ describe('A2A Registry discovery', () => {
       if (url === 'https://registry.example/a2a-registry/v1/agents?skill=image-analysis') {
         expect(new Headers(init?.headers).get('authorization')).toBe('Bearer discovery-token')
         return new Response(JSON.stringify({ agents: [{
-          agentId: 'b-vision', endpoint: 'https://b.example/a2a', uploadUrl: 'https://b.example/dsh/uploads',
+          agentId: 'b-vision', cardUrl: 'https://b.example/agents/b-vision/.well-known/agent-card.json', endpoint: 'https://b.example/agents/b-vision', uploadUrl: 'https://b.example/agents/b-vision/dsh/uploads',
         }] }), { status: 200, headers: { 'content-type': 'application/json' } })
       }
-      if (url === 'https://b.example/dsh/uploads') {
+      if (url === 'https://b.example/agents/b-vision/dsh/uploads') {
         return new Response(JSON.stringify({
           agentId: 'b-vision', attachmentId: 'attachment-1', uploadUrl: 'https://b.example/dsh/uploads/attachment-1', token: 'ticket', expiresAt: Date.now() + 10_000,
           name: request.name, mediaType: request.mediaType, byteLength: request.byteLength, sha256: request.sha256,
@@ -103,9 +103,54 @@ describe('A2A Registry discovery', () => {
     })
 
     await expect(client.searchAgents('image-analysis')).resolves.toEqual([{
-      id: 'b-vision', endpoint: 'https://b.example/a2a', directUpload: true,
+      id: 'b-vision', endpoint: 'https://b.example/agents/b-vision', directUpload: true,
     }])
     await expect(client.prepareUpload({ ...request, agentId: 'b-vision' as A2APrepareUploadRequest['agentId'] })).resolves.toMatchObject({ attachmentId: 'attachment-1' })
+  })
+
+  it('uses the Registry card URL without dropping a peer path', async () => {
+    const requested: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      requested.push(url)
+      return new Response(JSON.stringify({
+        name: 'B Vision', description: 'vision', version: '1.0.0',
+        supportedInterfaces: [{ url: 'https://relay.example/agents/b-vision/a2a', protocolBinding: 'HTTP+JSON', protocolVersion: '1.0', tenant: '' }],
+        capabilities: { streaming: false, pushNotifications: false, extensions: [] },
+        defaultInputModes: ['text/plain'], defaultOutputModes: ['text/plain'], skills: [],
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    context = new Context()
+    const client = new A2AClientService(context, {
+      agents: {
+        'b-vision': {
+          endpoint: 'https://relay.example/agents/b-vision',
+          cardUrl: 'https://relay.example/agents/b-vision/.well-known/agent-card.json',
+        },
+      },
+    })
+    await expect(client.discover('b-vision' as never)).resolves.toMatchObject({ name: 'B Vision' })
+    expect(requested).toEqual(['https://relay.example/agents/b-vision/.well-known/agent-card.json'])
+  })
+
+  it('derives a path-preserving card URL for static peers', async () => {
+    const requested: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      requested.push(url)
+      return new Response(JSON.stringify({
+        name: 'Static peer', description: 'test', version: '1.0.0',
+        supportedInterfaces: [{ url: 'https://relay.example/agents/static-peer/a2a', protocolBinding: 'HTTP+JSON', protocolVersion: '1.0', tenant: '' }],
+        capabilities: { streaming: false, pushNotifications: false, extensions: [] },
+        defaultInputModes: ['text/plain'], defaultOutputModes: ['text/plain'], skills: [],
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }))
+    context = new Context()
+    const client = new A2AClientService(context, {
+      agents: { peer: { endpoint: 'https://relay.example/agents/static-peer' } },
+    })
+    await expect(client.discover('peer' as never)).resolves.toMatchObject({ name: 'Static peer' })
+    expect(requested).toEqual(['https://relay.example/agents/static-peer/.well-known/agent-card.json'])
   })
 
   it('rejects Registry HTTP errors and insecure Registry URLs', async () => {

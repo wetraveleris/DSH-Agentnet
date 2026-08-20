@@ -26,12 +26,14 @@ import {
   JsonRpcTransportFactory,
   RestTransportFactory,
 } from '@a2a-js/sdk/client'
-import { Role, type AgentCard, type Message, type Part, type Task } from '@a2a-js/sdk'
+import { Role, taskStateToJSON, type AgentCard, type Message, type Part, type Task } from '@a2a-js/sdk'
 
 /** A configured remote Agent endpoint. */
 export interface A2AConfiguredAgent {
   /** HTTPS base URL that serves the peer's standard Agent Card. */
   readonly endpoint: string
+  /** Optional explicit standard Agent Card URL returned by the Registry. */
+  readonly cardUrl?: string
   /** Optional HTTPS endpoint that reserves direct-upload tickets. */
   readonly uploadUrl?: string
   /** Optional transport headers for a trusted private deployment. */
@@ -66,6 +68,7 @@ const SHA256_PATTERN = /^[0-9a-f]{64}$/
 
 const AgentConfig = z.object({
   endpoint: z.string().required(),
+  cardUrl: z.string(),
   uploadUrl: z.string(),
   headers: z.dict(z.string()),
 })
@@ -155,6 +158,10 @@ function textOfPart(part: Part): string {
   return ''
 }
 
+function stateOfTask(value: unknown): string {
+  return typeof value === 'number' ? taskStateToJSON(value) : String(value)
+}
+
 function jsonValue(value: unknown): A2AJsonValue {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value
   if (typeof value === 'number' && Number.isFinite(value)) return value
@@ -175,7 +182,7 @@ function taskView(agent: A2AAgentId, value: Message | Task): A2ATaskView {
       agentId: agent,
       taskId: taskId(task.id),
       contextId: task.contextId,
-      ...(task.status?.state === undefined ? {} : { state: String(task.status.state) }),
+      ...(task.status?.state === undefined ? {} : { state: stateOfTask(task.status.state) }),
       text: [
         ...(task.status?.message?.parts ?? []).map(textOfPart),
         ...task.history.flatMap(message => message.parts.map(textOfPart)),
@@ -246,6 +253,7 @@ export class A2AClientService extends TypertRemoteService implements A2AService 
     for (const [id, value] of Object.entries(resolved.agents)) {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error(`a2a-client: invalid Agent id ${JSON.stringify(id)}`)
       assertUrl(value.endpoint, resolved.allowInsecureHttp, `agents.${id}.endpoint`)
+      if (value.cardUrl !== undefined) assertUrl(value.cardUrl, resolved.allowInsecureHttp, `agents.${id}.cardUrl`)
       if (value.uploadUrl !== undefined) assertUrl(value.uploadUrl, resolved.allowInsecureHttp, `agents.${id}.uploadUrl`)
     }
     // The client is also used as a standalone service in tests and SDK hosts
@@ -293,17 +301,20 @@ export class A2AClientService extends TypertRemoteService implements A2AService 
       const record = value as Record<string, unknown>
       const discoveredId = record.agentId
       const endpoint = record.endpoint
+      const cardUrl = record.cardUrl
       const uploadUrl = record.uploadUrl
-      if (typeof discoveredId !== 'string' || typeof endpoint !== 'string' || (uploadUrl !== undefined && typeof uploadUrl !== 'string')) {
+      if (typeof discoveredId !== 'string' || typeof endpoint !== 'string' || typeof cardUrl !== 'string' || (uploadUrl !== undefined && typeof uploadUrl !== 'string')) {
         throw new Error('a2a-client: registry returned invalid Agent record')
       }
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(discoveredId)) throw new Error('a2a-client: registry returned invalid Agent id')
       assertUrl(endpoint, resolved.allowInsecureHttp, `Registry Agent ${discoveredId} endpoint`)
+      assertUrl(cardUrl, resolved.allowInsecureHttp, `Registry Agent ${discoveredId} cardUrl`)
       if (uploadUrl !== undefined) {
         assertUrl(uploadUrl, resolved.allowInsecureHttp, `Registry Agent ${discoveredId} uploadUrl`)
       }
       this.registryAgents.set(discoveredId, {
         endpoint,
+        cardUrl,
         ...(uploadUrl === undefined ? {} : { uploadUrl }),
       })
       return Object.freeze({ id: agentId(discoveredId), endpoint, directUpload: uploadUrl !== undefined })
@@ -316,7 +327,10 @@ export class A2AClientService extends TypertRemoteService implements A2AService 
     if (card === undefined) {
       const fetchImpl = fetchWithHeaders(config.headers, this.resolved.requestTimeoutMs, signal)
       const resolver = new DefaultAgentCardResolver({ fetchImpl })
-      card = resolver.resolve(assertUrl(config.endpoint, this.resolved.allowInsecureHttp, `agents.${String(id)}.endpoint`)).catch((error: unknown) => {
+      const cardBase = config.cardUrl === undefined
+        ? new URL('.well-known/agent-card.json', directoryUrl(config.endpoint, this.resolved.allowInsecureHttp, `agents.${String(id)}.endpoint`)).toString()
+        : assertUrl(config.cardUrl, this.resolved.allowInsecureHttp, `agents.${String(id)}.cardUrl`)
+      card = resolver.resolve(cardBase, '').catch((error: unknown) => {
         this.cards.delete(String(id))
         throw error
       })

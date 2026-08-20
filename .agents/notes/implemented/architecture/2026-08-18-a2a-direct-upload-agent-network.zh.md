@@ -12,7 +12,7 @@ DSH 需要调用本地进程之外的 Agent 所拥有的能力。远程 Agent �
 
 DSH 在 `packages/a2a/` 下提供可选的 A2A 能力组：`@deepseek-ai/dsh-a2a` 负责服务词汇，`@deepseek-ai/dsh-a2a-client` 使用官方 `@a2a-js/sdk@1.0.1` 客户端，`@deepseek-ai/dsh-tool-a2a` 提供发现和任务工具，`@deepseek-ai/dsh-a2a-gateway` 提供用于集成测试和实验的小型参考 Agent。`@deepseek-ai/dsh-a2a-network` 增加公网 Relay 和节点出站隧道，使 NAT 后的平等 Peer 无需入站端口即可发布由 Relay 派生的 Agent Card。其 Cordis 适配器可以把入站工作提交给节点已有的 DSH Agent Loop。`@deepseek-ai/dsh-client-ui-a2a` 只负责 Settings 网络管理和 Agent Card 发现，`@deepseek-ai/dsh-a2a-bundle` 负责保持组合为可选项：首页标准模式仍是唯一的用户任务入口。
 
-客户端发现 `/.well-known/agent-card.json`，通过官方 SDK 选择 Agent Card 声明的 A2A 1.0 HTTP+JSON 或 JSON-RPC 传输，发送标准 Message，并将标准 Message、Task 和 Artifact 投影为 DSH 自有的 JSON 类型。`agent-loop` 保持不变；工具消费方通过正常的能力 seam 调用 `ctx.a2a`。
+客户端为通过 Registry 发现的 Peer 使用其明确返回的 `cardUrl`。静态 Peer 未配置该字段时，会在包含 `/agents/{agentId}` 等 Relay 前缀的完整 Endpoint 路径下派生 `/.well-known/agent-card.json`。官方 SDK 选择 Agent Card 声明的 A2A 1.0 HTTP+JSON 或 JSON-RPC 接口并发送标准 Message；DSH 将标准 Message、Task 和 Artifact 投影为自有 JSON 类型，并把 SDK 的数值任务状态转换回协议名称。`agent-loop` 保持不变；工具消费方通过正常的能力 seam 调用 `ctx.a2a`。
 
 当 settings capability 存在时，客户端 Provider 会注册 `a2a-client` Settings namespace。Registry 发现 Token 和 Relay 访问 Token 可以配置为 credential 引用；Provider 每次操作都会解析引用，而组合配置中的明文 Token 仍是明确的部署覆盖项。Settings UI 只写入引用，因此加入网络也会同步配置首页工具，并且不会持久化密钥值。
 
@@ -34,7 +34,7 @@ Provider 默认拒绝未知 Agent ID、非 HTTPS 端点、无效摘要、超大�
 
 ## 测试
 
-Gateway 和 network 测试使用临时端口上的真实 Express 与 WebSocket listener，覆盖 Agent Card 发现、错误元数据、错误 token、摘要和长度校验、一次性上传票据、A2A 1.0 `message:send`、Completed Task 查询、附件元数据、出站 NAT 风格隧道和重连。TypeScript 检查覆盖 Host 和 Client 聚合工程。手工本地 smoke 也验证了官方 card 和 HTTP+JSON 端点；部署 smoke 与单元测试分开。
+Gateway 和 network 测试使用临时端口上的真实 Express 与 WebSocket listener，覆盖 Agent Card 发现、错误元数据、错误 token、摘要和长度校验、一次性上传票据、A2A 1.0 `message:send`、Completed Task 查询、附件元数据、出站 NAT 风格隧道和重连。一条完整的 Client→Relay→Node 测试通过官方 SDK 执行 Card 发现、文件直传、任务提交和任务查询，从而同时约束 Relay 路径保留、Card 声明的 REST 路由和任务状态投影。TypeScript 检查覆盖 Host 和 Client 聚合工程；部署 smoke 与单元测试分开。
 
 ## 后果
 

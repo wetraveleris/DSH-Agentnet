@@ -18,8 +18,9 @@ Provider 会拒绝未知 Agent、默认非 HTTPS 地址、非法 SHA-256、超�
   config:
     agents:
       research:
-        endpoint: 'https://agent.example.com'
-        uploadUrl: 'https://agent.example.com/dsh/uploads'
+        endpoint: 'https://relay.example.com/agents/research'
+        cardUrl: 'https://relay.example.com/agents/research/.well-known/agent-card.json'
+        uploadUrl: 'https://relay.example.com/agents/research/dsh/uploads'
     registryUrl: 'https://registry.example.com/a2a-registry/'
     registryToken: !!js process.env.DSH_A2A_REGISTRY_DISCOVERY_TOKEN
     registryTokenRef: DSH_A2A_REGISTRY_DISCOVERY_TOKEN
@@ -32,7 +33,7 @@ Provider 会拒绝未知 Agent、默认非 HTTPS 地址、非法 SHA-256、超�
 
 `registryTokenRef` 和 `relayAccessTokenRef` 让 Settings section 在每次操作时通过 `ctx.credentials` 解析 Token。部署配置中的明文 Token 优先；Settings 页面只保存引用，因此凭据轮换无需重启客户端即可生效。
 
-配置 `registryUrl` 后，`searchAgents(skill)` 会调用 `GET /v1/agents`，并缓存返回的 Endpoint 与上传 URL，供后续 `discover`、`send` 和上传操作使用。`registryToken` 是发现凭据，与 Peer 注册和心跳使用的 Registry 注册 Token 分离。Registry URL 与发现到的 Peer URL 默认必须使用 HTTPS；只有本地开发才应启用 `allowInsecureHttp`。带路径前缀的 URL 会被保留，例如 `https://host/a2a-registry/` 会映射到 `https://host/a2a-registry/v1/agents`。
+配置 `registryUrl` 后，`searchAgents(skill)` 会调用 `GET /v1/agents`，并缓存每个 Peer 返回的 Card、任务与上传 URL，供后续 `discover`、`send` 和上传操作使用。客户端读取 Registry 明确返回的 `cardUrl`；静态 Agent 未配置 `cardUrl` 时，会在完整 Endpoint 路径下派生 `/.well-known/agent-card.json`。`registryToken` 是发现凭据，与 Peer 注册和心跳使用的 Registry 注册 Token 分离。Registry URL 与发现到的 Peer URL 默认必须使用 HTTPS；只有本地开发才应启用 `allowInsecureHttp`。所有 URL 的路径前缀都会保留。
 
 ## 模型体验
 
