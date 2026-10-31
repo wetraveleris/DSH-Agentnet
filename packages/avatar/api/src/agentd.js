@@ -177,7 +177,7 @@ export function attachAgentd(ctx, runAgent, publishVideo) {
   ctx.effect(() => { const t = setInterval(() => { try { watchdog() } catch {} }, 60000); return () => clearInterval(t) })
 
   return {
-    panel: () => ({ date: day(), mode: mode(), plan: plan(), jobs: jobs(), cards: cards(), sessionFile: sessionFile() }),
+    panel: () => ({ date: day(), mode: mode(), plan: plan(), jobs: jobs(), cards: cards(), sessionFile: sessionFile(), workStart: 0, workEnd: 24, isToday: true, lanes: { content: { busy: false, pending: jobs().filter((j) => j.state === 'pending').length }, ops: { busy: false, pending: 0 }, improve: { busy: false, pending: 0 } } }),
     setMode, generatePlan, approvePlan, resolveCard,
     tick: () => void dispatch(),
     async ask(text) { return runAgent(text) },

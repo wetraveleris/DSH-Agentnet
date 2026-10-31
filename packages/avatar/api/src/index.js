@@ -128,7 +128,7 @@ import { fileURLToPath } from 'node:url'
       '/api/settings/bootstrap': {},
       '/api/settings/harness': { runtime: 'dsh', models: {}, sandbox: 'workspace-write', codex_auto_approve: false, locked: false, agents: [] },
       '/api/ideas': [],
-      '/api/analytics/platforms': {},
+      '/api/analytics/platforms': [],
       '/api/personas': [],
       '/api/profile': {},
       '/api/publishing-policy': {},
