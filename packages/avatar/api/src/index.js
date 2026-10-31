@@ -349,6 +349,13 @@ import { fileURLToPath } from 'node:url'
   function serveApp(pathname, req, res) {
     const distDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist-app')
     const assets = join(distDir, 'assets')
+    const rel = pathname.slice('/avatar/app/'.length)
+    const direct = join(distDir, rel)
+    if (rel && !rel.endsWith('/') && existsSync(direct) && statSync(direct).isFile()) {
+      const ext = direct.slice(direct.lastIndexOf('.')).toLowerCase()
+      const mime = { '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon', '.json': 'application/json', '.woff2': 'font/woff2' }[ext] ?? 'application/octet-stream'
+      res.writeHead(200, { 'content-type': mime }); res.end(readFileSync(direct)); return
+    }
     if (pathname.startsWith('/avatar/app/assets/')) {
       const f = join(assets, pathname.slice('/avatar/app/assets/'.length))
       if (existsSync(f)) {
