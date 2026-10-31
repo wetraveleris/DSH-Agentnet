@@ -25,9 +25,48 @@ export async function sendText(appId, appSecret, chatId, text) {
   return d.data
 }
 
-export function parseText(event) {
+export function parseText(eventOrMessage) {
   try {
-    const c = JSON.parse(event?.message?.content ?? '{}')
+    const raw = eventOrMessage?.message?.content ?? eventOrMessage?.content ?? '{}'
+    const c = JSON.parse(raw)
     return String(c.text ?? '').trim()
   } catch { return '' }
+}
+
+const IMG_URL = 'https://open.feishu.cn/open-apis/im/v1/images'
+const FILE_URL = 'https://open.feishu.cn/open-apis/im/v1/files'
+
+export async function uploadImage(appId, appSecret, buffer, filename) {
+  const token = await tenantToken(appId, appSecret)
+  const fd = new FormData()
+  fd.append('image_type', 'message')
+  fd.append('image', new Blob([buffer]), filename)
+  const r = await fetch(IMG_URL, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: fd })
+  const d = await r.json()
+  if (d.code !== 0) throw new Error(`上传图片失败：${d.code} ${d.msg}`)
+  return d.data.image_key
+}
+
+export async function uploadFile(appId, appSecret, buffer, filename, fileType) {
+  const token = await tenantToken(appId, appSecret)
+  const fd = new FormData()
+  fd.append('file_type', fileType)
+  fd.append('file_name', filename)
+  fd.append('file', new Blob([buffer]), filename)
+  const r = await fetch(FILE_URL, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: fd })
+  const d = await r.json()
+  if (d.code !== 0) throw new Error(`上传文件失败：${d.code} ${d.msg}`)
+  return d.data.file_key
+}
+
+export async function sendPayload(appId, appSecret, chatId, msgType, content) {
+  const token = await tenantToken(appId, appSecret)
+  const r = await fetch(`${SEND_URL}?receive_id_type=chat_id`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ receive_id: chatId, msg_type: msgType, content: JSON.stringify(content) }),
+  })
+  const d = await r.json()
+  if (d.code !== 0) throw new Error(`发送失败：${d.code} ${d.msg}`)
+  return d.data
 }

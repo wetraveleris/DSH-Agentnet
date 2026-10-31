@@ -23,7 +23,7 @@ button.primary{border-color:rgba(232,73,47,.5);color:#ff8a7a}button.ok{border-co
 </style></head><body>
 <header><h1>AVATAR</h1><nav>
 <a href="#/main" data-v="main">主编</a><a href="#/templates" data-v="templates">模板</a><a href="#/skills" data-v="skills">技能</a>
-<a href="#/outputs" data-v="outputs">内容</a><a href="#/accounts" data-v="accounts">账号</a><a href="#/profiles" data-v="profiles">画像</a>
+<a href="#/outputs" data-v="outputs">内容</a><a href="#/accounts" data-v="accounts">账号</a><a href="#/profiles" data-v="profiles">画像</a><a href="#/media" data-v="media">媒体</a>
 </nav></header><main id="view"></main>
 <script>
 const $ = (s) => document.querySelector(s)
@@ -69,6 +69,24 @@ async function send() {
   }
   const log = document.getElementById('log'); if (log) log.scrollTop = log.scrollHeight
 }
+async function mediaView() {
+  const d = await j('/api/avatar/outputs')
+  const files = []
+  for (const n of d.outputs ?? []) {
+    if (n.type === 'file') files.push(n)
+    for (const c of n.children ?? []) files.push(c)
+  }
+  const kindOf = (f) => f.kind || (/[.](mp4|mov|webm)$/i.test(f.name) ? 'video' : /[.](png|jpe?g|webp|gif)$/i.test(f.name) ? 'image' : /[.](mp3|wav|m4a)$/i.test(f.name) ? 'audio' : 'other')
+  const groups = { video: [], image: [], audio: [] }
+  for (const f of files) { const k = kindOf(f); if (groups[k]) groups[k].push(f) }
+  const src = (p) => '/api/media/' + String(p).split('/').map(encodeURIComponent).join('/')
+  const block = (title, list, render) => '<div class="card"><h2>' + title + '（' + list.length + '）</h2>' + (list.length ? list.slice(0, 60).map(render).join('') : '<span class="muted">暂无</span>') + '</div>'
+  const fmt = (n) => (n / 1024 / 1024).toFixed(1) + 'MB'
+  $('#view').innerHTML = block('视频', groups.video, (f) => '<div style="margin:10px 0"><div class="muted">' + esc(f.path) + ' · ' + fmt(f.size ?? 0) + '</div><video src="' + src(f.path) + '" controls preload="metadata" style="width:320px;max-width:100%;border-radius:8px;background:#000"></video></div>')
+    + block('图片', groups.image, (f) => '<div style="display:inline-block;margin:8px;width:180px"><img src="' + src(f.path) + '" loading="lazy" style="width:180px;height:120px;object-fit:cover;border-radius:8px;display:block"/><div class="muted">' + esc(f.name) + '</div></div>')
+    + block('音乐', groups.audio, (f) => '<div style="margin:10px 0"><div class="muted">' + esc(f.path) + '</div><audio src="' + src(f.path) + '" controls preload="metadata" style="width:100%"></audio></div>')
+    + '<div class="card"><div class="muted">共 ' + files.length + ' 个媒体文件（最多各显示 60 个）</div></div>'
+}
 async function templatesView() {
   const d = await j('/api/avatar/templates')
   $('#view').innerHTML = '<div class="card"><h2>模板（' + d.templates.length + '）</h2>' + d.templates.map((t) => '<div class="row"><span><b>' + esc(t.name) + '</b> <span class="tag">' + t.id + '</span></span><span class="tag">v' + t.version + ' · ' + (t.stages||[]).join(' → ') + '</span></div>').join('') + '</div>'
@@ -97,6 +115,7 @@ function render() {
   else if (v === 'outputs') outputsView()
   else if (v === 'accounts') accountsView()
   else if (v === 'profiles') profilesView()
+  else if (v === 'media') mediaView()
   else mainView()
 }
 window.addEventListener('hashchange', render)

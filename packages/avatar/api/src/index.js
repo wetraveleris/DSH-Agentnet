@@ -3,7 +3,7 @@ import { appendFileSync, readdirSync, readFileSync, existsSync, statSync, create
 import { spawn } from 'node:child_process'
 import { attachRuns, runAgentOnce } from './runs.js'
 import { attachAgentd } from './agentd.js'
-import { sendText, parseText, tenantToken } from './feishu.js'
+import { sendText, parseText, tenantToken, uploadImage, uploadFile, sendPayload } from './feishu.js'
 import { dashboardHtml } from './ui.js'
 import { join } from 'node:path'
 
@@ -198,7 +198,16 @@ import { fileURLToPath } from 'node:url'
     if (pathname === '/api/meter/usage') return json(200, deps.usageSummary())
     if (pathname === '/api/steps') return json(200, { steps: deps.stepsSummary(Number(new URL(String(req.url ?? '/'), 'http://x').searchParams.get('limit') ?? 50)) })
     if (pathname === '/api/feishu/event' && req.method === 'POST') { deps.feishuEvent(req, res); return }
-    if (pathname === '/api/feishu/health') return json(200, { ok: true, appId: Boolean(feishuAppId()) })
+    if (pathname === '/api/feishu/health') return json(200, { ok: true, appId: Boolean(deps.feishuAppId()) })
+    if (pathname === '/api/feishu/test-media' && process.env.AVATAR_DEBUG === '1') {
+      const q = new URL(String(req.url ?? '/'), 'http://x')
+      const kind = q.searchParams.get('kind') ?? 'video'
+      const chat = q.searchParams.get('chat') ?? ''
+      deps.sendMedia(deps.feishuAppId(), deps.feishuSecret(), chat, kind, Number(q.searchParams.get('limit') ?? 3))
+        .then(() => json(200, { ok: true }))
+        .catch((e) => json(500, { detail: String(e?.message ?? e) }))
+      return
+    }
     if (pathname === '/api/analytics/platforms') {
       const plats = [['douyin', '抖音'], ['xiaohongshu', '小红书'], ['bilibili', 'B站'], ['kuaishou', '快手'], ['shipinhao', '视频号']]
       return json(200, plats.map(([platform, label]) => {
@@ -642,7 +651,7 @@ export function apply(ctx) {
     })
   }
 
-  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, feishuEvent, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
+  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, feishuEvent, get feishuAppId() { return feishuAppId }, get feishuSecret() { return feishuSecret }, sendMedia, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
 
 
   const stepsFile = () => join(ROOT, 'outputs', '_steps', '_all.jsonl')
@@ -692,7 +701,42 @@ export function apply(ctx) {
     })
   }
 
+
+  function mediaFiles() {
+    const out = { video: [], image: [], audio: [] }
+    const walk = (list) => {
+      for (const n of list) {
+        if (n.type === 'file') { const k = n.kind || (/\.(mp4|mov|webm)$/i.test(n.name) ? 'video' : /\.(png|jpe?g|webp)$/i.test(n.name) ? 'image' : /\.(mp3|wav|m4a)$/i.test(n.name) ? 'audio' : 'other'); if (out[k]) out[k].push(n) }
+        if (n.children) walk(n.children)
+      }
+    }
+    walk(listOutputTree())
+    for (const k of Object.keys(out)) out[k].sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0))
+    return out
+  }
+  async function sendMedia(appId, secret, chatId, kind, limit = 3) {
+    const files = mediaFiles()[kind].slice(0, limit)
+    if (!files.length) { await sendText(appId, secret, chatId, `暂无${kind}文件`); return }
+    for (const f of files) {
+      const abs = join(ROOT, 'outputs', f.path)
+      if (!existsSync(abs)) continue
+      const buf = readFileSync(abs)
+      if (kind === 'image') {
+        const key = await uploadImage(appId, secret, buf, f.name)
+        await sendPayload(appId, secret, chatId, 'image', { image_key: key })
+      } else if (kind === 'video') {
+        const key = await uploadFile(appId, secret, buf, f.name, 'mp4')
+        await sendPayload(appId, secret, chatId, 'media', { file_key: key, file_name: f.name })
+      } else {
+        const key = await uploadFile(appId, secret, buf, f.name, 'stream')
+        await sendPayload(appId, secret, chatId, 'file', { file_key: key, file_name: f.name })
+      }
+    }
+  }
+
   async function feishuHandleEvent(body) {
+    try { appendFileSync(join(ROOT, 'outputs', '_feishu', 'events.jsonl'), JSON.stringify({ ts: Date.now(), type: body?.type ?? body?.header?.event_type, hasMsg: Boolean(body?.event?.message), evType: body?.header?.event_type, content: String(body?.event?.message?.content ?? '').slice(0, 80) }) + '\n') } catch {}
+    try { const m = body?.event?.message; appendFileSync(join(ROOT, 'outputs', '_feishu', 'handler.log'), JSON.stringify({ ts: Date.now(), phase: 'raw', chat: m?.chat_id, mid: m?.message_id, text: parseText(m).slice(0, 30) }) + '\n') } catch (e) { try { appendFileSync('/tmp/feishu-diag.err', String(e) + '\n') } catch {} }
     if (body?.type === 'url_verification') return { challenge: body.challenge }
     const ev = body?.event
     const msg = ev?.message
@@ -704,6 +748,8 @@ export function apply(ctx) {
     const text = parseText(msg)
     if (!chatId || !text) return {}
     void (async () => {
+      const flog = (o) => { try { appendFileSync(join(ROOT, 'outputs', '_feishu', 'handler.log'), JSON.stringify({ ts: Date.now(), ...o }) + '\n') } catch {} }
+      flog({ step: 'enter', text: text.slice(0, 40), chatId })
       try {
         const appId = feishuAppId(); const secret = feishuSecret()
         if (!appId || !secret) return
@@ -712,7 +758,16 @@ export function apply(ctx) {
           try { agentd.approvePlan(); await sendText(appId, secret, chatId, '✅ 计划已批准，开始执行') } catch (e) { await sendText(appId, secret, chatId, `⚠️ 批准失败：${String(e?.message ?? e)}`) }
           return
         }
+        if (/^(媒体|media)$/i.test(text)) {
+          const m = mediaFiles()
+          await sendText(appId, secret, chatId, `媒体库存量：视频 ${m.video.length}、图片 ${m.image.length}、音乐 ${m.audio.length}\n发「视频」「图片」「音乐」我直接发给你`)
+          return
+        }
+        if (/^(视频|video)$/i.test(text)) { await sendMedia(appId, secret, chatId, 'video', 3); return }
+        if (/^(图片|照片|image)$/i.test(text)) { await sendMedia(appId, secret, chatId, 'image', 6); return }
+        if (/^(音乐|音频|audio)$/i.test(text)) { await sendMedia(appId, secret, chatId, 'audio', 3); return }
         if (/^(状态|status)$/i.test(text)) {
+          flog({ step: 'status-branch' })
           const p = agentd.panel()
           const lines = [`模式：${p.mode}`, `计划：${p.plan ? `v${p.plan.version} ${p.plan.status}` : '无'}`, ...(p.plan?.items ?? []).slice(0, 6).map((it) => `${it.time} ${it.title}`), `待确认卡片：${p.cards.length}`]
           await sendText(appId, secret, chatId, lines.join('\n'))
@@ -746,7 +801,8 @@ export function apply(ctx) {
         off()
         await sendText(appId, secret, chatId, answer || '（没有生成回复，请重试）')
       } catch (e) {
-        try { await sendText(feishuAppId(), feishuSecret(), chatId, `出错了：${String(e?.message ?? e)}`) } catch {}
+        flog({ step: 'error', message: String(e?.message ?? e) })
+        try { await sendText(feishuAppId(), feishuSecret(), chatId, `出错了：${String(e?.message ?? e)}`) } catch (e2) { flog({ step: 'send-error', message: String(e2?.message ?? e2) }) }
       }
     })()
     return {}
