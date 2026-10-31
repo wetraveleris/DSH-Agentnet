@@ -30,6 +30,14 @@ export function attachAgentd(ctx, runAgent) {
   const jobs = () => readJson(jobsFile(), { jobs: [] }).jobs
   const cards = () => readJson(cardsFile(), []).filter((c) => c.status === 'pending')
 
+  function emitEvent(type, data = {}) {
+    try {
+      const f = join(base(), 'events.jsonl')
+      mkdirSync(join(base()), { recursive: true })
+      writeFileSync(f, JSON.stringify({ ts: Date.now(), event: type, ...data }) + '\n', { flag: 'a' })
+    } catch {}
+  }
+
   function record(actor, content, extra = {}) {
     mkdirSync(join(base(), 'days', day()), { recursive: true })
     writeFileSync(sessionFile(), JSON.stringify({ ts: Date.now(), actor, content, ...extra }) + '\n', { flag: 'a' })
@@ -38,7 +46,7 @@ export function attachAgentd(ctx, runAgent) {
   function addCard(card) {
     const all = readJson(cardsFile(), [])
     const full = { ...card, id: card.id ?? `card_${Date.now()}`, status: 'pending', createdAt: Date.now() }
-    all.push(full); writeJson(cardsFile(), all); return full
+    all.push(full); writeJson(cardsFile(), all); emitEvent('card.created', { id: full.id, cardType: full.type, title: full.title }); return full
   }
 
   function normalize(items) {
@@ -111,9 +119,11 @@ export function attachAgentd(ctx, runAgent) {
       const policy = TOOL_POLICY[job.type] ?? 'none'
       const text = await runAgent(`你是执行者。完成任务并输出结论，用中文，不超过 300 字。${policy === 'none' ? '不要调用工具。' : '可以调用需要的工具。'}任务：${job.title}`, { timeoutMs: policy === 'none' ? 90000 : 240000, tools: policy })
       job.state = 'done'; job.finishedAt = Date.now(); job.note = String(text).slice(0, 120); writeJson(jobsFile(), list)
+      emitEvent('job.done', { id: job.id, title: job.title, jobType: job.type })
       record('agent', `完成：${job.title}`)
     } catch (e) {
       job.state = 'failed'; job.note = String(e?.message ?? e).slice(0, 400); writeJson(jobsFile(), list)
+      emitEvent('job.failed', { id: job.id, title: job.title, error: job.note })
       record('system', `失败：${job.title} — ${job.note}`)
     } finally { busy = false; void dispatch() }
   }
@@ -148,7 +158,7 @@ export function attachAgentd(ctx, runAgent) {
     for (const j of list.jobs) {
       if (j.state === 'running' && j.startedAt && Date.now() - j.startedAt > 6 * 60000) {
         j.state = 'failed'; j.note = '看门狗：任务长时间无进展，已终止'; j.finishedAt = Date.now(); changed = true
-        record('system', `看门狗：${j.title} 超时，已终止并转下一项`)
+        record('system', `看门狗：${j.title} 超时，已终止并转下一项`); emitEvent('watchdog.timeout', { id: j.id, title: j.title })
       }
     }
     if (changed) { writeJson(jobsFile(), list); void dispatch() }

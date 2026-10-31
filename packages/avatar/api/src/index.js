@@ -202,6 +202,25 @@ export function apply(ctx) {
         req.on('close', () => { clearInterval(hb); set.delete(fn) })
         return
       }
+      if (u.pathname === '/api/avatar/events') {
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+        const f = join(ROOT, 'outputs', '_agentd', 'events.jsonl')
+        let pos = 0
+        try { if (existsSync(f)) pos = statSync(f).size } catch {}
+        const timer = setInterval(() => {
+          try {
+            if (!existsSync(f)) return
+            const size = statSync(f).size
+            if (size <= pos) return
+            const buf = readFileSync(f)
+            const chunk = buf.subarray(pos).toString('utf8')
+            pos = buf.length
+            for (const line of chunk.split('\n').filter(Boolean)) res.write('data: ' + line + '\n\n')
+          } catch {}
+        }, 2000)
+        req.on('close', () => clearInterval(timer))
+        return
+      }
       if (u.pathname === '/api/avatar/agentd/panel') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify(agentd.panel()))

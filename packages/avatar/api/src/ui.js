@@ -25,6 +25,7 @@ button.ok{border-color:rgba(60,186,106,.5);color:#3cba6a}
     <div class="card"><h2>今日计划</h2><div id="plan"></div></div>
     <div class="card"><h2>任务</h2><div id="jobs"></div></div>
     <div class="card"><h2>待确认</h2><div id="cards"></div></div>
+    <div class="card"><h2>动态</h2><div id="events" style="max-height:180px;overflow:auto"></div></div>
   </div>
   <div>
     <div class="card"><h2>对话</h2><div id="log"></div>
@@ -70,5 +71,16 @@ async function send() {
   $('log').scrollTop = $('log').scrollHeight
 }
 panel(); setInterval(panel, 8000)
+try {
+  const es = new EventSource('/api/avatar/events')
+  es.onmessage = (m) => {
+    let d; try { d = JSON.parse(m.data) } catch { return }
+    const box = $('events')
+    const line = document.createElement('div'); line.className = 'row'
+    line.innerHTML = '<span class="tag">' + new Date(d.ts).toTimeString().slice(0,5) + '</span><span>' + esc((d.event || '') + ' ' + (d.title || '')) + '</span>'
+    box.prepend(line); while (box.children.length > 30) box.lastChild.remove()
+    if (d.event === 'job.done' || d.event === 'job.failed') panel()
+  }
+} catch (e) {}
 </script></body></html>`
 }
