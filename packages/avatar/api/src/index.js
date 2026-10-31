@@ -144,6 +144,41 @@ import { fileURLToPath } from 'node:url'
     if (pathname === '/api/chat/stop' && req.method === 'POST') { deps.chatStop(req, res); return }
     if (pathname.startsWith('/api/chat/last/')) { json(200, { status: 'done', text: '' }); return }
     if (pathname.startsWith('/api/chat/jobs/')) { json(404, { detail: '任务记录已失效，请重新发送' }); return }
+    const tm = /^\/api\/templates\/([^/]+)\/(save|versions|rollback|run)$/.exec(pathname)
+    if (tm) {
+      const id = decodeURIComponent(tm[1]); const action = tm[2]
+      if (action === 'versions') return json(200, { versions: deps.listTemplateVersions(id) })
+      if (action === 'save' && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => {
+          try {
+            const body = JSON.parse(b || '{}')
+            const files = body.files ?? {}
+            const tdir = join(ROOT, 'templates', id)
+            if (!existsSync(tdir)) throw new Error('模板不存在')
+            deps.snapshotTemplate(id)
+            for (const [f, content] of Object.entries(files)) writeFileSync(join(tdir, f), String(content))
+            json(200, { ok: true, versions: deps.listTemplateVersions(id).length })
+          } catch (e) { json(400, { detail: String(e?.message ?? e) }) }
+        }); return
+      }
+      if (action === 'rollback' && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => {
+          try {
+            const v = String(JSON.parse(b || '{}').version ?? '')
+            const vdir = join(ROOT, 'templates', id, 'versions', v)
+            if (!existsSync(vdir)) throw new Error('版本不存在')
+            const tdir = join(ROOT, 'templates', id)
+            for (const f of readdirSync(vdir)) writeFileSync(join(tdir, f), readFileSync(join(vdir, f)))
+            json(200, { ok: true, restored: v })
+          } catch (e) { json(400, { detail: String(e?.message ?? e) }) }
+        }); return
+      }
+      if (action === 'run' && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c }); req.on('end', async () => {
+          try { const body = JSON.parse(b || '{}'); const st = await deps.runs.start({ templateId: id, variables: body.variables ?? {}, message: body.message ?? '' }); json(200, st) } catch (e) { json(400, { detail: String(e?.message ?? e) }) }
+        }); return
+      }
+    }
     if (pathname === '/api/rsi/diagnose') { return json(200, deps.diagnose(new URL(String(req.url ?? '/'), 'http://x').searchParams.get('templateId') ?? undefined)) }
     if (pathname === '/api/rsi/proposals') { return json(200, { proposals: deps.listProposals() }) }
     if (pathname === '/api/rsi/propose' && req.method === 'POST') {
@@ -422,6 +457,23 @@ export function apply(ctx) {
   }
 
 
+
+  function snapshotTemplate(templateId) {
+    const tdir = join(ROOT, 'templates', templateId)
+    const vdir = join(tdir, 'versions', String(Date.now()))
+    mkdirSync(vdir, { recursive: true })
+    for (const f of ['template.json', 'playbook.md', 'checklist.md', 'skeleton.json']) {
+      const src = join(tdir, f)
+      if (existsSync(src)) writeFileSync(join(vdir, f), readFileSync(src))
+    }
+    return vdir
+  }
+  function listTemplateVersions(templateId) {
+    const vdir = join(ROOT, 'templates', templateId, 'versions')
+    if (!existsSync(vdir)) return []
+    return readdirSync(vdir).filter((n) => /^\d+$/.test(n)).sort((a, b) => Number(b) - Number(a))
+  }
+
   const analyticsCache = new Map()
   function fetchAccountStats(platform) {
     const key = platform
@@ -558,7 +610,7 @@ export function apply(ctx) {
     })
   }
 
-  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary }
+  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
 
 
   const stepsFile = () => join(ROOT, 'outputs', '_steps', '_all.jsonl')
