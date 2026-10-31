@@ -363,6 +363,24 @@ import { fileURLToPath } from 'node:url'
 
 export function apply(ctx) {
 
+
+  function personaText() {
+    const name = process.env.AVATAR_PROFILE ?? 'haoge'
+    const dir = join(ROOT, 'profiles', name)
+    const parts = []
+    if (existsSync(dir)) {
+      for (const f of ['identity.md', 'style.md', 'audience.md', 'platforms.md', 'preferences.md', 'memory.md']) {
+        const p = join(dir, f)
+        if (existsSync(p)) parts.push(readFileSync(p, 'utf8'))
+      }
+    }
+    const head = '你是 Avatar 的主编（常驻数字员工），不是 Easel，也不是通用编程助手。你服务的账号是「浩哥侃球」（抖音 NBA 篮球解说）。你的工作：定选题、写脚本、做视频、发布、看数据、复盘。回答用中文，简洁、直接、像同事。'
+    return [head, ...parts].join('\n\n')
+  }
+  function installPersona(agentCtx) {
+    try { agentCtx.systemPrompt.section({ name: 'avatar/persona', order: 0, text: personaText() }) } catch (e) { /* ignore */ }
+  }
+
   async function ensureAgent(sid) {
     let handle = agents.get(sid)
     if (handle) return handle
@@ -371,7 +389,7 @@ export function apply(ctx) {
     let setup
     if (presets) {
       presetId = (await presets.resolve(undefined)).id
-      setup = async (agentCtx) => { await presets.mount(agentCtx, presetId) }
+      setup = async (agentCtx) => { await presets.mount(agentCtx, presetId); installPersona(agentCtx) }
     }
     handle = await ctx.agents.create({
       sessionId: sid,
@@ -575,7 +593,8 @@ export function apply(ctx) {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
         const set = subs.get(sid) ?? new Set(); subs.set(sid, set)
         let closed = false
-        const finish = () => { if (!closed) { closed = true; write(0, 'done', { sessionKey: sid }); res.end() } }
+        const guard = setTimeout(() => { if (!closed) { closed = true; try { write(0, 'error', '响应超时（可能卡在工具调用），请重发') } catch {} ; try { res.end() } catch {} } }, 6 * 60000)
+        const finish = () => { if (!closed) { closed = true; clearTimeout(guard); write(0, 'done', { sessionKey: sid }); res.end() } }
         const fn = (e) => {
           const t = e?.type
           if (t === 'assistant/message') {
@@ -588,12 +607,12 @@ export function apply(ctx) {
           else if (t === 'tool/result') write(4, 'step', { id: 'tool', label: '工具', state: 'done' })
           else if (t === 'turn/end') {
             const r = e.data?.reason
-            if (r?.kind === 'error') { write(5, 'error', String(r.error?.message ?? '执行失败')); closed = true; res.end() }
+            if (r?.kind === 'error') { clearTimeout(guard); write(5, 'error', String(r.error?.message ?? '执行失败')); closed = true; res.end() }
             else finish()
           }
         }
         set.add(fn)
-        req.on('close', () => { set.delete(fn) })
+        req.on('close', () => { clearTimeout(guard); set.delete(fn) })
         const hist = history.get(sid) ?? []; hist.push({ role: 'user', text: message }); history.set(sid, hist)
         handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: message }], source: { kind: 'user' } })
       } catch (e) {
@@ -699,6 +718,7 @@ export function apply(ctx) {
               setup = async (agentCtx) => {
                 if (installModelSelection) installModelSelection(agentCtx, { provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'high' })
                 await presets.mount(agentCtx, presetId)
+                installPersona(agentCtx)
               }
             }
             let handle = agents.get(sid)
