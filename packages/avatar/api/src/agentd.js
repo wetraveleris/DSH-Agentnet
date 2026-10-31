@@ -12,7 +12,7 @@ const nowHHMM = () => new Date().toTimeString().slice(0, 5)
 const TYPE_GATE = { review: 'review', publish: 'approval' }
 const TOOL_POLICY = { topic: 'none', script: 'none', report: 'none', sync: 'none', improve: 'none', monitor: 'none', assets: 'all', edit: 'all', review: 'all', publish: 'all' }
 
-export function attachAgentd(ctx, runAgent) {
+export function attachAgentd(ctx, runAgent, publishVideo) {
   try {
     const f = join(base(), 'jobs', `${day()}.json`)
     const data = readJson(f, null)
@@ -141,7 +141,17 @@ export function attachAgentd(ctx, runAgent) {
     writeJson(cardsFile(), all)
     if (card.type === 'plan' && action === 'approve') approvePlan()
     if (card.type === 'plan' && action === 'reject') void generatePlan('用户打回了上一版计划，请换一种安排')
-    if (card.type === 'approval' && action === 'approve') record('system', '发布已批准（DRY-RUN，未真发）')
+    if (card.type === 'approval' && action === 'approve') {
+      const video = (card.artifacts ?? []).find((a) => String(a).endsWith('.mp4'))
+      record('system', '发布已批准，开始提交抖音…')
+      emitEvent('publish.start', { video })
+      if (publishVideo) {
+        void publishVideo({ video, title: card.title, content: card.body ?? '', tags: '', exec: true }).then((r) => {
+          record('agent', r.ok ? `发布${r.dryRun ? '（dry-run）' : '成功'}：${r.message || r.state}` : `发布失败：${r.message || r.output}`)
+          emitEvent(r.ok ? 'publish.done' : 'publish.failed', { dryRun: r.dryRun, message: r.message })
+        })
+      }
+    }
     if (card.jobId) {
       const list = readJson(jobsFile(), { jobs: [] })
       const j = list.jobs.find((x) => x.id === card.jobId)

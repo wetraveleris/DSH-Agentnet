@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { attachRuns, runAgentOnce } from './runs.js'
 import { attachAgentd } from './agentd.js'
 import { dashboardHtml } from './ui.js'
@@ -58,8 +59,34 @@ export function apply(ctx) {
     return handle
   }
 
+
+  function publishVideo(p) {
+    return new Promise((resolve) => {
+      try {
+        const script = join(ROOT, 'skills', 'shared', 'scripts', 'douyin_publish.py')
+        if (!existsSync(script)) throw new Error('找不到 douyin_publish.py（AVATAR_ROOT=' + ROOT + '）')
+        const video = String(p.video ?? '')
+        if (!video) throw new Error('缺少 video')
+        const statusFile = join(ROOT, 'outputs', '_agentd', `publish-${Date.now()}.json`)
+        const py = process.env.PYTHON ?? 'python3'
+        const real = process.env.AVATAR_PUBLISH === '1'
+        const exec = Boolean(p.exec) && real
+        const args = [script, 'publish-video', '--video', video, '--title', String(p.title ?? '今日更新').slice(0, 30), '--content', String(p.content ?? ''), '--tags', String(p.tags ?? ''), '--status-file', statusFile]
+        if (exec) args.push('--exec')
+        const child = spawn(py, args, { cwd: ROOT, env: process.env })
+        let out = ''
+        child.stdout.on('data', (d) => { out += d }); child.stderr.on('data', (d) => { out += d })
+        child.on('close', (code) => {
+          let st = {}
+          try { st = JSON.parse(readFileSync(statusFile, 'utf8')) } catch {}
+          resolve({ ok: code === 0, dryRun: !exec, state: st.state ?? (code === 0 ? 'done' : 'failed'), message: st.message ?? '', output: out.slice(-600) })
+        })
+      } catch (e) { resolve({ ok: false, state: 'failed', message: String(e?.message ?? e) }) }
+    })
+  }
+
   const runs = attachRuns(ctx, getTemplate)
-  const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt))
+  const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt), publishVideo)
   ctx.effect(() => { const t = setInterval(() => { try { agentd.tick() } catch {} }, 15000); return () => clearInterval(t) })
   const subs = new Map()
   let sink = null
@@ -219,6 +246,14 @@ export function apply(ctx) {
           } catch {}
         }, 2000)
         req.on('close', () => clearInterval(timer))
+        return
+      }
+      if (u.pathname === '/api/avatar/publish' && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c })
+        req.on('end', async () => {
+          try { const p = JSON.parse(b || '{}'); const r = await publishVideo(p); res.writeHead(r.ok ? 200 : 400, { 'content-type': 'application/json' }); res.end(JSON.stringify(r)) }
+          catch (e) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ detail: String(e?.message ?? e) })) }
+        })
         return
       }
       if (u.pathname === '/api/avatar/agentd/panel') {
