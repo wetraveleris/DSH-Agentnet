@@ -144,6 +144,18 @@ import { fileURLToPath } from 'node:url'
     if (pathname === '/api/chat/stop' && req.method === 'POST') { deps.chatStop(req, res); return }
     if (pathname.startsWith('/api/chat/last/')) { json(200, { status: 'done', text: '' }); return }
     if (pathname.startsWith('/api/chat/jobs/')) { json(404, { detail: '任务记录已失效，请重新发送' }); return }
+    if (pathname === '/api/rsi/diagnose') { return json(200, deps.diagnose(new URL(String(req.url ?? '/'), 'http://x').searchParams.get('templateId') ?? undefined)) }
+    if (pathname === '/api/rsi/proposals') { return json(200, { proposals: deps.listProposals() }) }
+    if (pathname === '/api/rsi/propose' && req.method === 'POST') {
+      let b = ''; req.on('data', (c) => { b += c }); req.on('end', async () => {
+        try { const p = await deps.propose(String(JSON.parse(b || '{}').templateId ?? '')); json(200, p) } catch (e) { json(400, { detail: String(e?.message ?? e) }) }
+      }); return
+    }
+    if (pathname === '/api/rsi/apply' && req.method === 'POST') {
+      let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => {
+        try { const p = deps.applyProposal(String(JSON.parse(b || '{}').proposalId ?? '')); json(200, p) } catch (e) { json(400, { detail: String(e?.message ?? e) }) }
+      }); return
+    }
     if (pathname === '/api/analytics/platforms') {
       const plats = [['douyin', '抖音'], ['xiaohongshu', '小红书'], ['bilibili', 'B站'], ['kuaishou', '快手'], ['shipinhao', '视频号']]
       return json(200, plats.map(([platform, label]) => {
@@ -361,9 +373,9 @@ export function apply(ctx) {
   }
 
 
-  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics']) {
+  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics', '/api/rsi']) {
     ctx.effect(() => ctx.webServer.register({
-      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics'].includes(p) ? 'prefix' : 'exact',
+      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics', '/api/rsi'].includes(p) ? 'prefix' : 'exact',
       path: p,
       handler: (req, res) => { try { compatApi(String(req.url ?? '/').split('?')[0], req, res, deps) } catch (e) { res.writeHead(500); res.end(String(e)) } },
     }))
@@ -428,6 +440,75 @@ export function apply(ctx) {
     })
   }
 
+
+  function diagnose(templateId) {
+    const baseDir = join(ROOT, 'outputs', '_runs')
+    const out = { total: 0, done: 0, failed: 0, avgScore: 0, reviseRate: 0, byTemplate: {} }
+    if (!existsSync(baseDir)) return out
+    const scores = []; let revised = 0
+    for (const d of readdirSync(baseDir)) {
+      const f = join(baseDir, d, 'state.json')
+      if (!existsSync(f)) continue
+      let st; try { st = JSON.parse(readFileSync(f, 'utf8')) } catch { continue }
+      if (templateId && st.templateId !== templateId) continue
+      out.total += 1
+      if (st.status === 'done') out.done += 1
+      if (st.status === 'failed') out.failed += 1
+      if (st.critic?.score) scores.push(st.critic.score)
+      if ((st.reviseCount ?? 0) > 0) revised += 1
+      if (st.templateId) { const t = out.byTemplate[st.templateId] ??= { total: 0, done: 0 }; t.total += 1; if (st.status === 'done') t.done += 1 }
+    }
+    out.avgScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0
+    out.reviseRate = out.total ? Math.round((revised / out.total) * 100) : 0
+    return out
+  }
+
+  async function propose(templateId) {
+    const t = getTemplate(templateId)
+    if (!t) throw new Error('模板不存在')
+    const diag = diagnose(templateId)
+    const prompt = [
+      `你是内容方法论专家。基于诊断改进模板「${t.id}」。`,
+      `诊断：${JSON.stringify(diag)}`,
+      `当前手册：\n${(t.playbook ?? '').slice(0, 3000)}`,
+      `当前清单：\n${(t.checklist ?? '').slice(0, 1500)}`,
+      '输出 JSON：{"title":"提议标题","rationale":"为什么","changes":[{"file":"playbook.md|checklist.md","content":"完整新内容"}]}',
+    ].join('\n')
+    const text = await runAgentOnce(ctx, prompt, { timeoutMs: 120000 })
+    let prop; try { prop = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) } catch { throw new Error('模型未返回有效 JSON') }
+    const id = `${templateId}-${Date.now()}`
+    const dir = join(ROOT, 'templates', '_rsi')
+    mkdirSync(dir, { recursive: true })
+    const record = { id, templateId, title: prop.title ?? '提议', rationale: prop.rationale ?? '', changes: prop.changes ?? [], status: 'draft', createdAt: Date.now() }
+    writeFileSync(join(dir, `${id}.json`), JSON.stringify(record, null, 2))
+    return record
+  }
+
+  function listProposals() {
+    const dir = join(ROOT, 'templates', '_rsi')
+    if (!existsSync(dir)) return []
+    return readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => { try { return JSON.parse(readFileSync(join(dir, f), 'utf8')) } catch { return null } }).filter(Boolean).sort((a, b) => b.createdAt - a.createdAt)
+  }
+
+  function applyProposal(id) {
+    const dir = join(ROOT, 'templates', '_rsi')
+    const f = join(dir, `${id}.json`)
+    if (!existsSync(f)) throw new Error('提议不存在')
+    const prop = JSON.parse(readFileSync(f, 'utf8'))
+    const tdir = join(ROOT, 'templates', prop.templateId)
+    if (!existsSync(tdir)) throw new Error('模板不存在')
+    const vdir = join(tdir, 'versions', String(Date.now()))
+    mkdirSync(vdir, { recursive: true })
+    for (const c of prop.changes ?? []) {
+      const target = join(tdir, c.file)
+      if (existsSync(target)) writeFileSync(join(vdir, c.file), readFileSync(target))
+      writeFileSync(target, String(c.content ?? ''))
+    }
+    prop.status = 'applied'; prop.appliedAt = Date.now()
+    writeFileSync(f, JSON.stringify(prop, null, 2))
+    return prop
+  }
+
   async function chatStream(req, res) {
     let b = ''; req.on('data', (c) => { b += c })
     req.on('end', async () => {
@@ -475,7 +556,7 @@ export function apply(ctx) {
     })
   }
 
-  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats }
+  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, diagnose, propose, listProposals, applyProposal }
 
   const runs = attachRuns(ctx, getTemplate)
   const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt), publishVideo)
