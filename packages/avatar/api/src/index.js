@@ -135,7 +135,14 @@ import { fileURLToPath } from 'node:url'
       '/api/upload/limits': { maxBytes: 104857600 },
     }
     if (pathname in stubs) return json(200, stubs[pathname])
-    if (pathname === '/api/accounts') return json(200, listAccounts().map((a) => ({ platform: String(a.file).replace(/\.json$/, ''), loggedIn: a.state === 'success' || a.state === 'ok', name: a.message })))
+    if (pathname === '/api/accounts') {
+      const names = ['douyin', 'xiaohongshu', 'bilibili', 'kuaishou', 'shipinhao']
+      return json(200, names.map((p) => {
+        const hit = listAccounts().find((a) => a.file.startsWith(p))
+        return { platform: p, name: p, loggedIn: Boolean(hit && /success|ok|logged/i.test(String(hit.state))), status: hit?.state ?? 'unknown', message: hit?.message ?? '' }
+      }))
+    }
+    if (pathname.startsWith('/api/accounts/')) return json(200, { ok: true })
     return json(404, { detail: 'not found' })
   }
 
@@ -225,9 +232,9 @@ export function apply(ctx) {
   }
 
 
-  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output']) {
+  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts']) {
     ctx.effect(() => ctx.webServer.register({
-      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts'].includes(p) ? 'prefix' : 'exact',
+      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts'].includes(p) ? 'prefix' : 'exact',
       path: p,
       handler: (req, res) => { try { compatApi(String(req.url ?? '/').split('?')[0], req, res, agentd) } catch (e) { res.writeHead(500); res.end(String(e)) } },
     }))
