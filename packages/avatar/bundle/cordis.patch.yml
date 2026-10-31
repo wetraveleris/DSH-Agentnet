@@ -1,0 +1,6 @@
+# Avatar bundle: our API routes and tools on top of DSH.
+- insert:
+    - id: avatar-api
+      name: '@deepseek-ai/dsh-avatar-api'
+    - id: avatar-tools
+      name: '@deepseek-ai/dsh-avatar-tools'

@@ -1,0 +1,9 @@
+{
+  "name": "@deepseek-ai/dsh-avatar-bundle",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": { ".": "./lib/index.js", "./cordis.patch.yml": "./cordis.patch.yml", "./package.json": "./package.json" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "license": "MIT"
+}
