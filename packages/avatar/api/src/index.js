@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { attachRuns, runAgentOnce } from './runs.js'
 import { attachAgentd } from './agentd.js'
+import { dashboardHtml } from './ui.js'
 import { join } from 'node:path'
 
 const AGENT_LIB = 'file:///Users/traveler/Desktop/deepseek%20harness独立仓库/packages/core/agent/lib/index.js'
@@ -38,6 +39,7 @@ function getTemplate(id) {
 export function apply(ctx) {
   const runs = attachRuns(ctx, getTemplate)
   const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt))
+  ctx.effect(() => { const t = setInterval(() => { try { agentd.tick() } catch {} }, 15000); return () => clearInterval(t) })
   const subs = new Map()
   let sink = null
   const agents = new Map()
@@ -57,6 +59,14 @@ export function apply(ctx) {
     if (!set) return
     for (const fn of set) { try { fn(event) } catch {} }
   })
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: '/avatar',
+    handler: (_req, res) => { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(dashboardHtml()) },
+  }))
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: '/avatar/',
+    handler: (_req, res) => { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(dashboardHtml()) },
+  }))
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix', path: '/api/avatar',
     handler: (req, res) => {
