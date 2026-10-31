@@ -3,6 +3,7 @@ import { appendFileSync, readdirSync, readFileSync, existsSync, statSync, create
 import { spawn } from 'node:child_process'
 import { attachRuns, runAgentOnce } from './runs.js'
 import { attachAgentd } from './agentd.js'
+import { sendText, parseText, tenantToken } from './feishu.js'
 import { dashboardHtml } from './ui.js'
 import { join } from 'node:path'
 
@@ -196,6 +197,8 @@ import { fileURLToPath } from 'node:url'
     }
     if (pathname === '/api/meter/usage') return json(200, deps.usageSummary())
     if (pathname === '/api/steps') return json(200, { steps: deps.stepsSummary(Number(new URL(String(req.url ?? '/'), 'http://x').searchParams.get('limit') ?? 50)) })
+    if (pathname === '/api/feishu/event' && req.method === 'POST') { deps.feishuEvent(req, res); return }
+    if (pathname === '/api/feishu/health') return json(200, { ok: true, appId: Boolean(feishuAppId()) })
     if (pathname === '/api/analytics/platforms') {
       const plats = [['douyin', '抖音'], ['xiaohongshu', '小红书'], ['bilibili', 'B站'], ['kuaishou', '快手'], ['shipinhao', '视频号']]
       return json(200, plats.map(([platform, label]) => {
@@ -438,9 +441,9 @@ export function apply(ctx) {
   }
 
 
-  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics', '/api/rsi', '/api/meter', '/api/steps']) {
+  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics', '/api/rsi', '/api/meter', '/api/steps', '/api/feishu']) {
     ctx.effect(() => ctx.webServer.register({
-      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics', '/api/rsi', '/api/meter', '/api/steps'].includes(p) ? 'prefix' : 'exact',
+      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics', '/api/rsi', '/api/meter', '/api/steps', '/api/feishu'].includes(p) ? 'prefix' : 'exact',
       path: p,
       handler: (req, res) => { try { compatApi(String(req.url ?? '/').split('?')[0], req, res, deps) } catch (e) { res.writeHead(500); res.end(String(e)) } },
     }))
@@ -639,7 +642,7 @@ export function apply(ctx) {
     })
   }
 
-  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
+  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, feishuEvent, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
 
 
   const stepsFile = () => join(ROOT, 'outputs', '_steps', '_all.jsonl')
@@ -675,6 +678,78 @@ export function apply(ctx) {
     const f = stepsFile()
     if (!existsSync(f)) return []
     return readFileSync(f, 'utf8').split('\n').filter(Boolean).slice(-limit).map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+  }
+
+
+  const feishuAppId = () => process.env.FEISHU_APP_ID ?? ''
+  const feishuSecret = () => process.env.FEISHU_APP_SECRET ?? ''
+  const feishuSeen = new Set()
+  function feishuEvent(req, res) {
+    let b = ''; req.on('data', (c) => { b += c })
+    req.on('end', async () => {
+      try { const body = JSON.parse(b || '{}'); const out = await feishuHandleEvent(body); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(out)) }
+      catch { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}') }
+    })
+  }
+
+  async function feishuHandleEvent(body) {
+    if (body?.type === 'url_verification') return { challenge: body.challenge }
+    const ev = body?.event
+    const msg = ev?.message
+    if (!msg || body?.header?.event_type !== 'im.message.receive_v1') return {}
+    if (msg.message_id && feishuSeen.has(msg.message_id)) return {}
+    if (msg.message_id) { feishuSeen.add(msg.message_id); if (feishuSeen.size > 2000) feishuSeen.clear() }
+    if (String(msg.sender?.sender_type ?? '') === 'app') return {}
+    const chatId = msg.chat_id
+    const text = parseText(msg)
+    if (!chatId || !text) return {}
+    void (async () => {
+      try {
+        const appId = feishuAppId(); const secret = feishuSecret()
+        if (!appId || !secret) return
+        // 确定性命令：审批 / 状态
+        if (/^(批准|通过计划|approve)$/i.test(text)) {
+          try { agentd.approvePlan(); await sendText(appId, secret, chatId, '✅ 计划已批准，开始执行') } catch (e) { await sendText(appId, secret, chatId, `⚠️ 批准失败：${String(e?.message ?? e)}`) }
+          return
+        }
+        if (/^(状态|status)$/i.test(text)) {
+          const p = agentd.panel()
+          const lines = [`模式：${p.mode}`, `计划：${p.plan ? `v${p.plan.version} ${p.plan.status}` : '无'}`, ...(p.plan?.items ?? []).slice(0, 6).map((it) => `${it.time} ${it.title}`), `待确认卡片：${p.cards.length}`]
+          await sendText(appId, secret, chatId, lines.join('\n'))
+          return
+        }
+        if (/^(计划|plan)$/i.test(text)) {
+          const p = agentd.panel()
+          await sendText(appId, secret, chatId, p.plan ? `计划 v${p.plan.version}（${p.plan.status}）\n` + p.plan.items.map((it) => `${it.time} ${it.title}`).join('\n') : '暂无计划，回复「生成计划」')
+          return
+        }
+        if (/^(生成计划|regen)$/i.test(text)) { await sendText(appId, secret, chatId, '正在生成计划…'); void agentd.generatePlan(''); return }
+        const m = /^(通过|打回)\s+(\S+)/.exec(text)
+        if (m) {
+          try { agentd.resolveCard(m[2], m[1] === '通过' ? 'approve' : 'reject'); await sendText(appId, secret, chatId, `已${m[1]}：${m[2]}`) } catch (e) { await sendText(appId, secret, chatId, `操作失败：${String(e?.message ?? e)}`) }
+          return
+        }
+        // 普通对话：走主编写会话
+        const sid = 'feishu-' + chatId
+        const handle = await ensureAgent(sid)
+        let answer = ''
+        const off = ctx.on('session/event', (se, e) => {
+          if (String(se?.id) !== sid) return
+          if (e.type === 'assistant/message') {
+            const parts = e.data?.message?.content ?? []
+            const t = parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
+            if (t) answer += (answer ? '\n' : '') + t
+          }
+        })
+        handle.agent.followup({ id: String(Date.now()), role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
+        await Promise.race([handle.agent.whenIdle(), new Promise((r) => setTimeout(r, 180000))])
+        off()
+        await sendText(appId, secret, chatId, answer || '（没有生成回复，请重试）')
+      } catch (e) {
+        try { await sendText(feishuAppId(), feishuSecret(), chatId, `出错了：${String(e?.message ?? e)}`) } catch {}
+      }
+    })()
+    return {}
   }
 
   const runs = attachRuns(ctx, getTemplate)
@@ -853,6 +928,18 @@ export function apply(ctx) {
       if (u.pathname === '/api/avatar/outputs') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ outputs: listOutputs() })); return }
       if (u.pathname === '/api/avatar/profiles') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ profiles: listProfiles() })); return }
       if (u.pathname === '/api/avatar/accounts') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ accounts: listAccounts() })); return }
+      if (u.pathname === '/api/feishu/event' && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c })
+        req.on('end', async () => {
+          try {
+            const body = JSON.parse(b || '{}')
+            const out = await feishuHandleEvent(body)
+            res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(out))
+          } catch (e) { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({})) }
+        })
+        return
+      }
+      if (u.pathname === '/api/feishu/health') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, appId: Boolean(feishuAppId()) })); return }
       if (u.pathname === '/api/avatar/agentd/panel') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify(agentd.panel()))
