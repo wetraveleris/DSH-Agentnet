@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, readdirSync, readFileSync, existsSync, statSync, createReadStream } from 'node:fs'
+import { appendFileSync, readdirSync, readFileSync, existsSync, statSync, createReadStream, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { attachRuns, runAgentOnce } from './runs.js'
 import { attachAgentd } from './agentd.js'
@@ -37,6 +37,26 @@ function getTemplate(id) {
   return { id, meta, playbook: read('playbook.md'), checklist: read('checklist.md'), skeleton: read('skeleton.json'), versions }
 }
 
+
+
+const profilesDir = () => join(ROOT, 'profiles')
+function listPersonas() {
+  const dir = profilesDir()
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter((n) => !n.startsWith('.') && statSync(join(dir, n)).isDirectory()).map((n) => {
+    let desc = ''
+    for (const f of ['identity.md', 'README.md']) {
+      const p = join(dir, n, f)
+      if (existsSync(p)) { desc = readFileSync(p, 'utf8').split('\n').find((l) => l.trim() && !l.startsWith('#') && !l.startsWith('<!--'))?.trim() ?? ''; break }
+    }
+    return { name: n, description: desc.slice(0, 100) }
+  })
+}
+function personaFiles(name) {
+  const dir = join(profilesDir(), name)
+  if (!existsSync(dir)) return null
+  return readdirSync(dir).filter((f) => !f.startsWith('.') && statSync(join(dir, f)).isFile()).map((f) => ({ filename: f, content: readFileSync(join(dir, f), 'utf8') }))
+}
 
 function listSkills() {
   const dir = join(ROOT, 'skills', 'builtin')
@@ -124,6 +144,24 @@ import { fileURLToPath } from 'node:url'
     if (pathname === '/api/chat/stop' && req.method === 'POST') { deps.chatStop(req, res); return }
     if (pathname.startsWith('/api/chat/last/')) { json(200, { status: 'done', text: '' }); return }
     if (pathname.startsWith('/api/chat/jobs/')) { json(404, { detail: '任务记录已失效，请重新发送' }); return }
+    if (pathname === '/api/personas' && req.method === 'GET') return json(200, listPersonas())
+    if (pathname === '/api/personas' && req.method === 'POST') {
+      let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => {
+        try { const name = String(JSON.parse(b || '{}').name ?? '').trim(); if (!name) throw new Error('缺少 name'); const dir = join(profilesDir(), name); mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'identity.md'), '# ' + name + '\n'); json(200, { ok: true, name }) } catch (e) { json(400, { detail: String(e?.message ?? e) }) }
+      }); return
+    }
+    const pm = /^\/api\/persona\/([^/]+)(\/files|\/file)?$/.exec(pathname)
+    if (pm) {
+      const name = decodeURIComponent(pm[1]); const sub = pm[2] ?? ''
+      if (sub === '' && req.method === 'GET') { const files = personaFiles(name); if (!files) return json(404, { detail: '画像不存在' }); return json(200, { name, content: files.map((f) => f.content).join('\n\n') }) }
+      if (sub === '' && req.method === 'DELETE') { const dir = join(profilesDir(), name); if (existsSync(dir)) rmSync(dir, { recursive: true, force: true }); return json(200, { ok: true, deleted: name }) }
+      if (sub === '/files') { const files = personaFiles(name); return files ? json(200, { name, files }) : json(404, { detail: '画像不存在' }) }
+      if (sub === '/file' && req.method === 'PUT') {
+        let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => {
+          try { const { filename, content } = JSON.parse(b || '{}'); if (!filename) throw new Error('缺少 filename'); const dir = join(profilesDir(), name); mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, String(filename)), String(content ?? '')); json(200, { ok: true }) } catch (e) { json(400, { detail: String(e?.message ?? e) }) }
+        }); return
+      }
+    }
     if (pathname === '/api/status') {
       return json(200, { gateway: true, transport: 'dsh', runtime: 'dsh', skills: listSkills().map((x) => ({ name: x.id, description: x.description, layer: 'builtin', needsApi: false })), personas: [] })
     }
@@ -274,9 +312,9 @@ export function apply(ctx) {
   }
 
 
-  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat']) {
+  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat', '/api/personas', '/api/persona']) {
     ctx.effect(() => ctx.webServer.register({
-      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat'].includes(p) ? 'prefix' : 'exact',
+      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat', '/api/personas', '/api/persona'].includes(p) ? 'prefix' : 'exact',
       path: p,
       handler: (req, res) => { try { compatApi(String(req.url ?? '/').split('?')[0], req, res, deps) } catch (e) { res.writeHead(500); res.end(String(e)) } },
     }))
