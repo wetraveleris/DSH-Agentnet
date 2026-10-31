@@ -144,6 +144,43 @@ import { fileURLToPath } from 'node:url'
     if (pathname === '/api/chat/stop' && req.method === 'POST') { deps.chatStop(req, res); return }
     if (pathname.startsWith('/api/chat/last/')) { json(200, { status: 'done', text: '' }); return }
     if (pathname.startsWith('/api/chat/jobs/')) { json(404, { detail: '任务记录已失效，请重新发送' }); return }
+    if (pathname === '/api/accounts' && req.method === 'GET') {
+      const platforms = ['douyin', 'xiaohongshu', 'bilibili', 'kuaishou', 'shipinhao']
+      return json(200, platforms.map((p) => {
+        const st = deps.readLoginStatus(p)
+        return { platform: p, name: st.name ?? p, loggedIn: st.state === 'success', status: st.state, message: st.message ?? '' }
+      }))
+    }
+    const al = /^\/api\/accounts\/([^/]+)\/(login|status|sms|whoami)$/.exec(pathname)
+    if (al) {
+      const platform = al[1]; const action = al[2]
+      if (action === 'login' && req.method === 'POST') return json(200, deps.startLogin(platform))
+      if (action === 'status') return json(200, deps.readLoginStatus(platform))
+      if (action === 'whoami') { deps.startWhoami(platform).then((r) => json(200, r)); return }
+      if (action === 'sms' && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => {
+          try { const code = String(JSON.parse(b || '{}').code ?? ''); writeFileSync(join(deps.loginDir(), `${platform}.code`), code); json(200, { ok: true }) } catch (e) { json(400, { detail: String(e?.message ?? e) }) }
+        }); return
+      }
+    }
+    if (pathname === '/api/sessions' && req.method === 'GET') {
+      const f = join(ROOT, 'outputs', '_sessions', 'web.json')
+      return json(200, { sessions: existsSync(f) ? (JSON.parse(readFileSync(f, 'utf8')).sessions ?? []) : [] })
+    }
+    if (pathname === '/api/sessions' && req.method === 'PUT') {
+      let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => {
+        try { const d = JSON.parse(b || '{}'); mkdirSync(join(ROOT, 'outputs', '_sessions'), { recursive: true }); writeFileSync(join(ROOT, 'outputs', '_sessions', 'web.json'), JSON.stringify({ sessions: d.sessions ?? [], updated: Date.now() })); json(200, { ok: true }) } catch (e) { json(400, { detail: String(e?.message ?? e) }) }
+      }); return
+    }
+    if (pathname === '/api/settings/harness' && req.method === 'GET') {
+      return json(200, { runtime: 'dsh', models: { 'deepseek-official': 'deepseek-v4-flash' }, sandbox: 'workspace-write', codex_auto_approve: false, locked: false, agents: [] })
+    }
+    if (pathname === '/api/settings/harness/models/dsh' && req.method === 'POST') {
+      return json(200, { runtime: 'dsh', models: [{ id: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash', default: true }, { id: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro', default: false }] })
+    }
+    if (pathname === '/api/env/tools') {
+      return json(200, { python: process.env.PYTHON ?? 'python3', tools: [], cachedAt: Date.now() })
+    }
     if (pathname === '/api/personas' && req.method === 'GET') return json(200, listPersonas())
     if (pathname === '/api/personas' && req.method === 'POST') {
       let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => {
@@ -312,9 +349,9 @@ export function apply(ctx) {
   }
 
 
-  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat', '/api/personas', '/api/persona']) {
+  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env']) {
     ctx.effect(() => ctx.webServer.register({
-      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat', '/api/personas', '/api/persona'].includes(p) ? 'prefix' : 'exact',
+      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env'].includes(p) ? 'prefix' : 'exact',
       path: p,
       handler: (req, res) => { try { compatApi(String(req.url ?? '/').split('?')[0], req, res, deps) } catch (e) { res.writeHead(500); res.end(String(e)) } },
     }))
@@ -330,6 +367,33 @@ export function apply(ctx) {
     },
   }))
 
+
+
+  const loginDir = () => join(ROOT, 'outputs', '_login')
+  const loginStatusFile = (platform) => join(loginDir(), `${platform}.login.json`)
+  function readLoginStatus(platform) {
+    try { return JSON.parse(readFileSync(loginStatusFile(platform), 'utf8')) } catch { return { state: 'unknown', message: '' } }
+  }
+  function startLogin(platform) {
+    const py = process.env.PYTHON ?? 'python3'
+    const script = join(ROOT, 'skills', 'shared', 'scripts', 'douyin_publish.py')
+    mkdirSync(loginDir(), { recursive: true })
+    const qr = join(loginDir(), `${platform}.png`)
+    const st = join(loginDir(), `${platform}.login.json`)
+    const child = spawn(py, [script, 'login', '--qr-out', qr, '--status-file', st, '--timeout', '600'], { cwd: ROOT, env: process.env, detached: true, stdio: 'ignore' })
+    child.unref()
+    return { started: true, platform, qr: `/api/media/_login/${platform}.png`, status: `/api/avatar/accounts/${platform}/status` }
+  }
+  function startWhoami(platform) {
+    return new Promise((resolve) => {
+      const py = process.env.PYTHON ?? 'python3'
+      const script = join(ROOT, 'skills', 'shared', 'scripts', 'douyin_publish.py')
+      const child = spawn(py, [script, 'whoami'], { cwd: ROOT, env: process.env })
+      let out = ''
+      child.stdout.on('data', (d) => { out += d }); child.stderr.on('data', (d) => { out += d })
+      child.on('close', () => { try { resolve(JSON.parse(out.trim().split('\n').pop())) } catch { resolve({ loggedIn: false }) } })
+    })
+  }
 
   async function chatStream(req, res) {
     let b = ''; req.on('data', (c) => { b += c })
@@ -378,7 +442,7 @@ export function apply(ctx) {
     })
   }
 
-  const deps = { get agentd() { return agentd }, chatStream, chatStop }
+  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir }
 
   const runs = attachRuns(ctx, getTemplate)
   const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt), publishVideo)
