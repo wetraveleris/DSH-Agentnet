@@ -141,6 +141,21 @@ export function attachAgentd(ctx, runAgent) {
     return card
   }
 
+
+  function watchdog() {
+    const list = readJson(jobsFile(), { jobs: [] })
+    let changed = false
+    for (const j of list.jobs) {
+      if (j.state === 'running' && j.startedAt && Date.now() - j.startedAt > 6 * 60000) {
+        j.state = 'failed'; j.note = '看门狗：任务长时间无进展，已终止'; j.finishedAt = Date.now(); changed = true
+        record('system', `看门狗：${j.title} 超时，已终止并转下一项`)
+      }
+    }
+    if (changed) { writeJson(jobsFile(), list); void dispatch() }
+  }
+
+  ctx.effect(() => { const t = setInterval(() => { try { watchdog() } catch {} }, 60000); return () => clearInterval(t) })
+
   return {
     panel: () => ({ date: day(), mode: mode(), plan: plan(), jobs: jobs(), cards: cards(), sessionFile: sessionFile() }),
     setMode, generatePlan, approvePlan, resolveCard,

@@ -37,6 +37,27 @@ function getTemplate(id) {
 }
 
 export function apply(ctx) {
+
+  async function ensureAgent(sid) {
+    let handle = agents.get(sid)
+    if (handle) return handle
+    const presets = ctx.get('agentPresets')
+    let presetId
+    let setup
+    if (presets) {
+      presetId = (await presets.resolve(undefined)).id
+      setup = async (agentCtx) => { await presets.mount(agentCtx, presetId) }
+    }
+    handle = await ctx.agents.create({
+      sessionId: sid,
+      agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+      meta: { cwd: process.cwd(), ...(presetId ? { agentPreset: presetId } : {}) },
+      ...(setup ? { setup } : {}),
+    })
+    agents.set(sid, handle)
+    return handle
+  }
+
   const runs = attachRuns(ctx, getTemplate)
   const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt))
   ctx.effect(() => { const t = setInterval(() => { try { agentd.tick() } catch {} }, 15000); return () => clearInterval(t) })
@@ -143,6 +164,42 @@ export function apply(ctx) {
             res.end()
           }
         })
+        return
+      }
+      if (u.pathname === '/api/avatar/send' && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c })
+        req.on('end', async () => {
+          try {
+            const payload = JSON.parse(b || '{}')
+            const sid = String(payload.sessionId ?? '') || ('avatar-' + randomUUID())
+            const handle = await ensureAgent(sid)
+            const hist = history.get(sid) ?? []; hist.push({ role: 'user', text: String(payload.message ?? '') }); history.set(sid, hist)
+            handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: String(payload.message ?? '') }], source: { kind: 'user' } })
+            res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, sessionId: sid }))
+          } catch (e) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ detail: String(e?.message ?? e) })) }
+        })
+        return
+      }
+      if (u.pathname === '/api/avatar/stream') {
+        const sid = u.searchParams.get('sessionId') ?? ''
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+        const send = (obj) => res.write('data: ' + JSON.stringify(obj) + '\n\n')
+        const set = subs.get(sid) ?? new Set(); subs.set(sid, set)
+        const fn = (e) => {
+          const t = e?.type
+          if (t === 'assistant/message') {
+            const parts = e.data?.message?.content ?? []
+            const text = parts.filter((p) => p.type === 'text').map((p) => p.text).join('')
+            const reasoning = parts.filter((p) => p.type === 'reasoning').map((p) => p.text).join('')
+            if (reasoning) send({ type: 'thinking', text: reasoning })
+            if (text) { send({ type: 'message', text }); const h2 = history.get(sid) ?? []; h2.push({ role: 'assistant', text }); history.set(sid, h2) }
+          } else if (t === 'turn/start') send({ type: 'turn', phase: 'start' })
+          else if (t === 'turn/end') send({ type: 'turn', phase: 'end' })
+          else if (t === 'tool/call') send({ type: 'step', name: e.data?.name ?? 'tool' })
+        }
+        set.add(fn)
+        const hb = setInterval(() => { try { res.write(': hb\n\n') } catch {} }, 15000)
+        req.on('close', () => { clearInterval(hb); set.delete(fn) })
         return
       }
       if (u.pathname === '/api/avatar/agentd/panel') {
