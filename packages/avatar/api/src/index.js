@@ -37,6 +37,54 @@ function getTemplate(id) {
   return { id, meta, playbook: read('playbook.md'), checklist: read('checklist.md'), skeleton: read('skeleton.json'), versions }
 }
 
+
+function listSkills() {
+  const dir = join(ROOT, 'skills', 'builtin')
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter((n) => existsSync(join(dir, n, 'SKILL.md'))).map((id) => {
+    const raw = readFileSync(join(dir, id, 'SKILL.md'), 'utf8').slice(0, 800)
+    const m = /^---[\s\S]*?description:\s*([\s\S]*?)\n[a-z-]+:/m.exec(raw) || /^---[\s\S]*?description:\s*(.*)/m.exec(raw)
+    return { id, description: (m?.[1] ?? '').replace(/^[>|]-?\s*/m, '').replace(/\n\s+/g, ' ').trim().slice(0, 120) }
+  }).sort((a, b) => a.id.localeCompare(b.id))
+}
+
+function listOutputs() {
+  const dir = join(ROOT, 'outputs')
+  const out = []
+  const walk = (d, depth) => {
+    if (depth > 4 || !existsSync(d)) return
+    for (const n of readdirSync(d)) {
+      if (n.startsWith('_') || n === 'node_modules') continue
+      const f = join(d, n)
+      let st
+      try { st = statSync(f) } catch { continue }
+      if (st.isDirectory()) walk(f, depth + 1)
+      else if (/\.(mp4|jpg|jpeg|png|webp|mp3|srt)$/i.test(n) && st.size > 10240) {
+        out.push({ path: f.slice(ROOT.length + 1), name: n, size: st.size, mtime: st.mtimeMs })
+      }
+    }
+  }
+  walk(dir, 0)
+  return out.sort((a, b) => b.mtime - a.mtime).slice(0, 60)
+}
+
+function listProfiles() {
+  const dir = join(ROOT, 'profiles')
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter((n) => !n.startsWith('.')).map((n) => {
+    const f = join(dir, n); const st = statSync(f)
+    return { name: n, size: st.size, mtime: st.mtimeMs, dir: st.isDirectory() }
+  })
+}
+
+function listAccounts() {
+  const dir = join(ROOT, 'outputs', '_login')
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter((n) => n.endsWith('.json')).map((n) => {
+    try { const d = JSON.parse(readFileSync(join(dir, n), 'utf8')); return { file: n, state: d.state ?? '?', message: String(d.message ?? '').slice(0, 80), ts: d.ts ?? 0 } } catch { return null }
+  }).filter(Boolean)
+}
+
 export function apply(ctx) {
 
   async function ensureAgent(sid) {
@@ -256,6 +304,10 @@ export function apply(ctx) {
         })
         return
       }
+      if (u.pathname === '/api/avatar/skills') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ skills: listSkills() })); return }
+      if (u.pathname === '/api/avatar/outputs') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ outputs: listOutputs() })); return }
+      if (u.pathname === '/api/avatar/profiles') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ profiles: listProfiles() })); return }
+      if (u.pathname === '/api/avatar/accounts') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ accounts: listAccounts() })); return }
       if (u.pathname === '/api/avatar/agentd/panel') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify(agentd.panel()))
