@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
-import { attachRuns } from './runs.js'
+import { attachRuns, runAgentOnce } from './runs.js'
+import { attachAgentd } from './agentd.js'
 import { join } from 'node:path'
 
 const AGENT_LIB = 'file:///Users/traveler/Desktop/deepseek%20harness独立仓库/packages/core/agent/lib/index.js'
@@ -36,6 +37,7 @@ function getTemplate(id) {
 
 export function apply(ctx) {
   const runs = attachRuns(ctx, getTemplate)
+  const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt))
   const subs = new Map()
   let sink = null
   const agents = new Map()
@@ -133,6 +135,32 @@ export function apply(ctx) {
         })
         return
       }
+      if (u.pathname === '/api/avatar/agentd/panel') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(agentd.panel()))
+        return
+      }
+      if (u.pathname === '/api/avatar/agentd/mode' && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c })
+        req.on('end', () => { try { const m = JSON.parse(b || '{}').mode; agentd.setMode(m); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ mode: m })) } catch (e) { res.writeHead(400); res.end(JSON.stringify({ detail: String(e) })) } })
+        return
+      }
+      if (u.pathname === '/api/avatar/agentd/plan/generate' && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c })
+        req.on('end', async () => { try { const p = await agentd.generatePlan(JSON.parse(b || '{}').instruction ?? ''); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ plan: p })) } catch (e) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ detail: String(e?.message ?? e) })) } })
+        return
+      }
+      if (u.pathname === '/api/avatar/agentd/plan/approve' && req.method === 'POST') {
+        try { const p = agentd.approvePlan(); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ plan: p })) } catch (e) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ detail: String(e?.message ?? e) })) }
+        return
+      }
+      const cardResolve = /^\/api\/avatar\/agentd\/cards\/([^/]+)\/resolve$/.exec(u.pathname)
+      if (cardResolve && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c })
+        req.on('end', () => { try { const card = agentd.resolveCard(decodeURIComponent(cardResolve[1]), JSON.parse(b || '{}').action ?? 'ok'); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, card })) } catch (e) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ detail: String(e?.message ?? e) })) } })
+        return
+      }
+      if (u.pathname === '/api/avatar/agentd/tick' && req.method === 'POST') { agentd.tick(); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true })); return }
       if (u.pathname === '/api/avatar/runs' && req.method === 'GET') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ runs: runs.list() }))

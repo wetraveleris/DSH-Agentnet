@@ -23,7 +23,7 @@ function listRuns() {
 }
 
 /** Run one prompt on a fresh DSH agent and return its assistant text. */
-async function runAgentOnce(ctx, prompt, opts = {}) {
+export async function runAgentOnce(ctx, prompt, opts = {}) {
   const sid = 'run-' + randomUUID()
   const presets = ctx.get('agentPresets')
   let presetId
