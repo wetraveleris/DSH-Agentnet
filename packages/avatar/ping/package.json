@@ -1,0 +1,9 @@
+{
+  "name": "@deepseek-ai/dsh-avatar-ping",
+  "version": "0.0.1",
+  "description": "Avatar spike plugin: HTTP route, SSE, Range, tool registration",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": { ".": "./lib/index.js", "./package.json": "./package.json" },
+  "license": "MIT"
+}
