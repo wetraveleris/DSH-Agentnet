@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
+import { appendFileSync, readdirSync, readFileSync, existsSync, statSync, createReadStream } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { attachRuns, runAgentOnce } from './runs.js'
 import { attachAgentd } from './agentd.js'
@@ -112,6 +112,14 @@ import { fileURLToPath } from 'node:url'
       const m = /^cards\/([^/]+)\/resolve$/.exec(sub)
       if (m) { let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => { try { agentd.resolveCard(decodeURIComponent(m[1]), JSON.parse(b || '{}').action ?? 'ok'); json(200, { ok: true }) } catch (e) { json(400, { detail: String(e?.message ?? e) }) } }); return }
     }
+    if (pathname.startsWith('/api/media/')) { serveOutputsMedia(pathname.slice('/api/media/'.length), req, res); return }
+    if (pathname.startsWith('/api/output/')) { serveOutputsMedia(pathname.slice('/api/output/'.length), req, res); return }
+    if (pathname === '/api/artifacts/archive') {
+      const q = new URL(String(req.url ?? '/'), 'http://x').searchParams.get('path') ?? ''
+      const dir = join(ROOT, 'outputs', q)
+      const paths = existsSync(dir) && statSync(dir).isDirectory() ? readdirSync(dir).slice(0, 200).map((n) => q.replace(/\/$/, '') + '/' + n) : []
+      return json(200, { paths })
+    }
     const stubs = {
       '/api/trends': { trends: [], updated: 0 },
       '/api/schedule': [],
@@ -129,6 +137,28 @@ import { fileURLToPath } from 'node:url'
     if (pathname in stubs) return json(200, stubs[pathname])
     if (pathname === '/api/accounts') return json(200, listAccounts().map((a) => ({ platform: String(a.file).replace(/\.json$/, ''), loggedIn: a.state === 'success' || a.state === 'ok', name: a.message })))
     return json(404, { detail: 'not found' })
+  }
+
+
+  function serveOutputsMedia(relRaw, req, res) {
+    const base = join(ROOT, 'outputs')
+    const rel = decodeURIComponent(String(relRaw)).replace(/^outputs\//, '').replace(/^\.\//, '')
+    const file = join(base, rel)
+    if (!file.startsWith(base) || !existsSync(file) || !statSync(file).isFile()) { res.writeHead(404); res.end('not found'); return }
+    const st = statSync(file)
+    const ext = file.slice(file.lastIndexOf('.')).toLowerCase()
+    const mime = { '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.srt': 'text/plain; charset=utf-8', '.json': 'application/json', '.html': 'text/html; charset=utf-8' }[ext] ?? 'application/octet-stream'
+    res.setHeader('content-type', mime); res.setHeader('accept-ranges', 'bytes')
+    const range = req.headers.range
+    if (range) {
+      const m = /bytes=(\d*)-(\d*)/.exec(range)
+      const start = m?.[1] ? parseInt(m[1], 10) : 0
+      const end = m?.[2] ? parseInt(m[2], 10) : st.size - 1
+      res.writeHead(206, { 'content-range': `bytes ${start}-${end}/${st.size}`, 'content-length': end - start + 1 })
+      createReadStream(file, { start, end }).pipe(res); return
+    }
+    res.writeHead(200, { 'content-length': st.size })
+    createReadStream(file).pipe(res)
   }
 
   function serveApp(pathname, req, res) {
@@ -195,9 +225,9 @@ export function apply(ctx) {
   }
 
 
-  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts']) {
+  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output']) {
     ctx.effect(() => ctx.webServer.register({
-      kind: p.endsWith('/') || p === '/api/templates' || p === '/api/agentd' ? 'prefix' : 'exact',
+      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts'].includes(p) ? 'prefix' : 'exact',
       path: p,
       handler: (req, res) => { try { compatApi(String(req.url ?? '/').split('?')[0], req, res, agentd) } catch (e) { res.writeHead(500); res.end(String(e)) } },
     }))
@@ -388,7 +418,6 @@ export function apply(ctx) {
       if (u.pathname === '/api/avatar/outputs') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ outputs: listOutputs() })); return }
       if (u.pathname === '/api/avatar/profiles') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ profiles: listProfiles() })); return }
       if (u.pathname === '/api/avatar/accounts') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ accounts: listAccounts() })); return }
-      if (u.pathname === '/api' || u.pathname.startsWith('/api/')) { compatApi(u.pathname, req, res); return }
       if (u.pathname === '/api/avatar/agentd/panel') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify(agentd.panel()))
