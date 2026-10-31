@@ -46,10 +46,16 @@ export async function runAgentOnce(ctx, prompt, opts = {}) {
       text += parts.filter((p) => p.type === 'text').map((p) => p.text).join('')
     }
   })
+  const timeoutMs = Number(opts.timeoutMs ?? 180000)
+  let timer
   try {
     handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: prompt }], source: { kind: 'user' } })
-    await handle.agent.whenIdle()
+    await Promise.race([
+      handle.agent.whenIdle(),
+      new Promise((_, rej) => { timer = setTimeout(() => { try { handle.agent.cancel('timeout') } catch {} ; rej(new Error('任务超时')) }, timeoutMs) }),
+    ])
   } finally {
+    clearTimeout(timer)
     off?.()
     await handle.dispose().catch(() => {})
   }

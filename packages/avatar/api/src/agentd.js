@@ -4,7 +4,7 @@ import { runAgentOnce } from './runs.js'
 
 const ROOT = process.env.AVATAR_ROOT ?? process.cwd()
 const base = () => join(ROOT, 'outputs', '_agentd')
-const day = () => new Date().toISOString().slice(0, 10)
+const day = () => { const d = new Date(); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}` }
 const readJson = (f, d) => { try { return JSON.parse(readFileSync(f, 'utf8').replace(/^\uFEFF/, '')) } catch { return d } }
 const writeJson = (f, v) => { mkdirSync(join(f, '..'), { recursive: true }); writeFileSync(f, JSON.stringify(v, null, 2)) }
 const nowHHMM = () => new Date().toTimeString().slice(0, 5)
@@ -12,6 +12,11 @@ const nowHHMM = () => new Date().toTimeString().slice(0, 5)
 const TYPE_GATE = { review: 'review', publish: 'approval' }
 
 export function attachAgentd(ctx, runAgent) {
+  try {
+    const f = join(base(), 'jobs', `${day()}.json`)
+    const data = readJson(f, null)
+    if (data) { let changed = false; for (const j of data.jobs) if (j.state === 'running') { j.state = 'pending'; changed = true }; if (changed) writeJson(f, data) }
+  } catch {}
   const modeFile = () => join(base(), 'mode.json')
   const planFile = () => join(base(), 'plans', `${day()}.json`)
   const jobsFile = () => join(base(), 'jobs', `${day()}.json`)
@@ -94,11 +99,11 @@ export function attachAgentd(ctx, runAgent) {
         busy = false
         return
       }
-      const text = await runAgent(`执行今日计划任务：${job.title}。用中文，产出可落盘的结果。`)
+      const text = await runAgent(`你是执行者。直接完成任务并输出结论，不要调用工具、不要读写文件。任务：${job.title}。用中文，不超过 300 字。`, { timeoutMs: 90000 })
       job.state = 'done'; job.finishedAt = Date.now(); job.note = String(text).slice(0, 120); writeJson(jobsFile(), list)
       record('agent', `完成：${job.title}`)
     } catch (e) {
-      job.state = 'failed'; job.note = String(e?.message ?? e); writeJson(jobsFile(), list)
+      job.state = 'failed'; job.note = String(e?.message ?? e).slice(0, 400); writeJson(jobsFile(), list)
       record('system', `失败：${job.title} — ${job.note}`)
     } finally { busy = false; void dispatch() }
   }
