@@ -135,14 +135,6 @@ export function apply(ctx) {
         })
         return
       }
-      if (u.pathname === '/api/avatar/probe') {
-        runAgentOnce(ctx, '说 ok', { timeoutMs: 30000 }).then((t) => {
-          res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, text: t }))
-        }).catch((e) => {
-          res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, message: String(e?.message ?? e), stack: String(e?.stack ?? '').split('\n').slice(0, 6) }))
-        })
-        return
-      }
       if (u.pathname === '/api/avatar/agentd/panel') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify(agentd.panel()))

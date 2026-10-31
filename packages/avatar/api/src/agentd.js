@@ -10,6 +10,7 @@ const writeJson = (f, v) => { mkdirSync(join(f, '..'), { recursive: true }); wri
 const nowHHMM = () => new Date().toTimeString().slice(0, 5)
 
 const TYPE_GATE = { review: 'review', publish: 'approval' }
+const TOOL_POLICY = { topic: 'none', script: 'none', report: 'none', sync: 'none', improve: 'none', monitor: 'none', assets: 'all', edit: 'all', review: 'all', publish: 'all' }
 
 export function attachAgentd(ctx, runAgent) {
   try {
@@ -49,11 +50,19 @@ export function attachAgentd(ctx, runAgent) {
   }
 
   async function generatePlan(instruction = '') {
+    let recent = ''
+    try {
+      const f = sessionFile()
+      if (existsSync(f)) {
+        recent = readFileSync(f, 'utf8').split('\n').filter(Boolean).slice(-10).map((l) => { try { const m = JSON.parse(l); return `${m.actor}: ${String(m.content).slice(0, 80)}` } catch { return '' } }).filter(Boolean).join('\n')
+      }
+    } catch {}
     const prompt = [
       '你是用户的常驻主编（24 小时在岗的数字员工）。请给出今天的计划。',
       `现在时间：${new Date().toLocaleString('zh-CN')}。所有时间必须从当前时间往后排，不要排已经过去的时间。`,
       '要求：恰好 6–8 项；必须覆盖 topic/script/assets/edit/review/publish/sync/report 八类（可合并但至少 6 类）；每项写 why；review/publish 标 gate（review/approval）。',
       instruction ? `用户要求：${instruction}` : '',
+      recent.length ? `最近执行记录：\n${recent}` : '',
       '只输出 JSON：{"summary":"一句话","rhythm":["节奏1"],"items":[{"time":"HH:MM","type":"topic","title":"...","why":"...","gate":"none"}]}',
     ].filter(Boolean).join('\n')
     let text = ''
@@ -99,7 +108,8 @@ export function attachAgentd(ctx, runAgent) {
         busy = false
         return
       }
-      const text = await runAgent(`你是执行者。直接完成任务并输出结论，不要调用工具、不要读写文件。任务：${job.title}。用中文，不超过 300 字。`, { timeoutMs: 90000 })
+      const policy = TOOL_POLICY[job.type] ?? 'none'
+      const text = await runAgent(`你是执行者。完成任务并输出结论，用中文，不超过 300 字。${policy === 'none' ? '不要调用工具。' : '可以调用需要的工具。'}任务：${job.title}`, { timeoutMs: policy === 'none' ? 90000 : 240000, tools: policy })
       job.state = 'done'; job.finishedAt = Date.now(); job.note = String(text).slice(0, 120); writeJson(jobsFile(), list)
       record('agent', `完成：${job.title}`)
     } catch (e) {

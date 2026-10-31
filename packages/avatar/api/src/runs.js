@@ -30,7 +30,10 @@ export async function runAgentOnce(ctx, prompt, opts = {}) {
   let setup
   if (presets) {
     presetId = (await presets.resolve(undefined)).id
-    setup = async (agentCtx) => { await presets.mount(agentCtx, presetId) }
+    setup = async (agentCtx) => {
+      await presets.mount(agentCtx, presetId)
+      if (opts.tools === 'none') agentCtx.tools.restrict({ allow: [] })
+    }
   }
   const handle = await ctx.agents.create({
     sessionId: sid,
