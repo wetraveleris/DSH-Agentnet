@@ -156,6 +156,8 @@ import { fileURLToPath } from 'node:url'
         try { const p = deps.applyProposal(String(JSON.parse(b || '{}').proposalId ?? '')); json(200, p) } catch (e) { json(400, { detail: String(e?.message ?? e) }) }
       }); return
     }
+    if (pathname === '/api/meter/usage') return json(200, deps.usageSummary())
+    if (pathname === '/api/steps') return json(200, { steps: deps.stepsSummary(Number(new URL(String(req.url ?? '/'), 'http://x').searchParams.get('limit') ?? 50)) })
     if (pathname === '/api/analytics/platforms') {
       const plats = [['douyin', '抖音'], ['xiaohongshu', '小红书'], ['bilibili', 'B站'], ['kuaishou', '快手'], ['shipinhao', '视频号']]
       return json(200, plats.map(([platform, label]) => {
@@ -373,9 +375,9 @@ export function apply(ctx) {
   }
 
 
-  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics', '/api/rsi']) {
+  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics', '/api/rsi', '/api/meter', '/api/steps']) {
     ctx.effect(() => ctx.webServer.register({
-      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics', '/api/rsi'].includes(p) ? 'prefix' : 'exact',
+      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics', '/api/rsi', '/api/meter', '/api/steps'].includes(p) ? 'prefix' : 'exact',
       path: p,
       handler: (req, res) => { try { compatApi(String(req.url ?? '/').split('?')[0], req, res, deps) } catch (e) { res.writeHead(500); res.end(String(e)) } },
     }))
@@ -556,7 +558,43 @@ export function apply(ctx) {
     })
   }
 
-  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, diagnose, propose, listProposals, applyProposal }
+  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary }
+
+
+  const stepsFile = () => join(ROOT, 'outputs', '_steps', '_all.jsonl')
+  const meterFile = () => join(ROOT, 'outputs', '_meter', 'usage.jsonl')
+  const appendLine = (f, obj) => { try { mkdirSync(join(f, '..'), { recursive: true }); appendFileSync(f, JSON.stringify(obj) + '\n') } catch {} }
+  ctx.on('session/event', (session, ev) => {
+    const sid = String(session?.id ?? session)
+    if (ev?.type === 'tool/call') appendLine(stepsFile(), { ts: Date.now(), session: sid, tool: ev.data?.name ?? ev.data?.tool ?? 'tool', state: 'call' })
+    else if (ev?.type === 'tool/result') appendLine(stepsFile(), { ts: Date.now(), session: sid, state: 'result', ok: !ev.data?.error })
+    else if (ev?.type === 'assistant/message') {
+      const u = ev.data?.usage
+      if (u) appendLine(meterFile(), { ts: Date.now(), session: sid, model: ev.data?.message?.source?.model ?? '', usage: u })
+    }
+  })
+  function usageSummary() {
+    const out = { requests: 0, inputTokens: 0, outputTokens: 0, byModel: {} }
+    const f = meterFile()
+    if (existsSync(f)) {
+      for (const line of readFileSync(f, 'utf8').split('\n').filter(Boolean)) {
+        try {
+          const r = JSON.parse(line); const u = r.usage ?? {}
+          out.requests += 1
+          out.inputTokens += Number(u.inputTokens ?? u.input_tokens ?? u.prompt_tokens ?? 0)
+          out.outputTokens += Number(u.outputTokens ?? u.output_tokens ?? u.completion_tokens ?? 0)
+          const m = r.model || 'unknown'; out.byModel[m] = out.byModel[m] ?? { requests: 0, tokens: 0 }
+          out.byModel[m].requests += 1; out.byModel[m].tokens += Number(u.inputTokens ?? u.input_tokens ?? 0) + Number(u.outputTokens ?? u.output_tokens ?? 0)
+        } catch {}
+      }
+    }
+    return out
+  }
+  function stepsSummary(limit = 50) {
+    const f = stepsFile()
+    if (!existsSync(f)) return []
+    return readFileSync(f, 'utf8').split('\n').filter(Boolean).slice(-limit).map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean)
+  }
 
   const runs = attachRuns(ctx, getTemplate)
   const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt), publishVideo)
