@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
+import { attachRuns } from './runs.js'
+import { join } from 'node:path'
 
 const AGENT_LIB = 'file:///Users/traveler/Desktop/deepseek%20harness独立仓库/packages/core/agent/lib/index.js'
 let installModelSelection
@@ -7,7 +9,33 @@ await import(AGENT_LIB).then((m) => { installModelSelection = m.installModelSele
 
 export const name = 'avatar-api'
 export const inject = ['webServer', 'tools', 'agents']
+const ROOT = process.env.AVATAR_ROOT ?? process.cwd()
+const templatesDir = () => join(ROOT, 'templates')
+
+function listTemplates() {
+  const dir = templatesDir()
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter((n) => !n.startsWith('_') && existsSync(join(dir, n, 'template.json'))).map((id) => {
+    try {
+      const meta = JSON.parse(readFileSync(join(dir, id, 'template.json'), 'utf8'))
+      return { id, name: meta.name ?? id, version: meta.version ?? '1.0.0', description: meta.description ?? '', stages: meta.pipeline ?? [], updated: statSync(join(dir, id, 'template.json')).mtimeMs }
+    } catch { return { id, name: id, version: '?', description: '模板解析失败', stages: [] } }
+  })
+}
+
+function getTemplate(id) {
+  const dir = join(templatesDir(), id)
+  if (!existsSync(dir)) return null
+  const read = (f) => { try { return readFileSync(join(dir, f), 'utf8') } catch { return null } }
+  let meta = {}
+  try { meta = JSON.parse(read('template.json') ?? '{}') } catch {}
+  const versionsDir = join(dir, 'versions')
+  const versions = existsSync(versionsDir) ? readdirSync(versionsDir).filter((v) => statSync(join(versionsDir, v)).isDirectory()) : []
+  return { id, meta, playbook: read('playbook.md'), checklist: read('checklist.md'), skeleton: read('skeleton.json'), versions }
+}
+
 export function apply(ctx) {
+  const runs = attachRuns(ctx, getTemplate)
   const subs = new Map()
   let sink = null
   const agents = new Map()
@@ -103,6 +131,54 @@ export function apply(ctx) {
             res.end()
           }
         })
+        return
+      }
+      if (u.pathname === '/api/avatar/runs' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ runs: runs.list() }))
+        return
+      }
+      if (u.pathname === '/api/avatar/runs' && req.method === 'POST') {
+        let b = ''
+        req.on('data', (c) => { b += c })
+        req.on('end', async () => {
+          try {
+            const st = await runs.start(JSON.parse(b || '{}'))
+            res.writeHead(200, { 'content-type': 'application/json' })
+            res.end(JSON.stringify(st))
+          } catch (e) {
+            res.writeHead(400, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ detail: String(e?.message ?? e) }))
+          }
+        })
+        return
+      }
+      const runRetry = /^\/api\/avatar\/runs\/([^/]+)\/retry$/.exec(u.pathname)
+      if (runRetry && req.method === 'POST') {
+        runs.retry(decodeURIComponent(runRetry[1])).then((st) => {
+          res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(st))
+        }).catch((e) => {
+          res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ detail: String(e?.message ?? e) }))
+        })
+        return
+      }
+      const runOne = /^\/api\/avatar\/runs\/([^/]+)$/.exec(u.pathname)
+      if (runOne && req.method === 'GET') {
+        const st = runs.get(decodeURIComponent(runOne[1]))
+        res.writeHead(st ? 200 : 404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(st ?? { detail: '运行不存在' }))
+        return
+      }
+      if (u.pathname === '/api/avatar/templates' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ root: ROOT, templates: listTemplates() }))
+        return
+      }
+      if (u.pathname.startsWith('/api/avatar/templates/') && req.method === 'GET') {
+        const id = decodeURIComponent(u.pathname.slice('/api/avatar/templates/'.length))
+        const t = getTemplate(id)
+        res.writeHead(t ? 200 : 404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(t ?? { detail: '模板不存在' }))
         return
       }
       if (u.pathname === '/api/avatar/history') {
