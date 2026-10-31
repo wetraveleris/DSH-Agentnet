@@ -144,6 +144,18 @@ import { fileURLToPath } from 'node:url'
     if (pathname === '/api/chat/stop' && req.method === 'POST') { deps.chatStop(req, res); return }
     if (pathname.startsWith('/api/chat/last/')) { json(200, { status: 'done', text: '' }); return }
     if (pathname.startsWith('/api/chat/jobs/')) { json(404, { detail: '任务记录已失效，请重新发送' }); return }
+    if (pathname === '/api/analytics/platforms') {
+      const plats = [['douyin', '抖音'], ['xiaohongshu', '小红书'], ['bilibili', 'B站'], ['kuaishou', '快手'], ['shipinhao', '视频号']]
+      return json(200, plats.map(([platform, label]) => {
+        const st = deps.readLoginStatus(platform)
+        return { platform, label, loggedIn: st.state === 'success' }
+      }))
+    }
+    if (pathname === '/api/analytics/account') {
+      const platform = new URL(String(req.url ?? '/'), 'http://x').searchParams.get('platform') ?? 'douyin'
+      deps.fetchAccountStats(platform).then((d) => json(200, d)).catch((e) => json(500, { detail: String(e?.message ?? e) }))
+      return
+    }
     if (pathname === '/api/accounts' && req.method === 'GET') {
       const platforms = ['douyin', 'xiaohongshu', 'bilibili', 'kuaishou', 'shipinhao']
       return json(200, platforms.map((p) => {
@@ -349,9 +361,9 @@ export function apply(ctx) {
   }
 
 
-  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env']) {
+  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics']) {
     ctx.effect(() => ctx.webServer.register({
-      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env'].includes(p) ? 'prefix' : 'exact',
+      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat', '/api/personas', '/api/persona', '/api/upload', '/api/settings', '/api/env', '/api/analytics'].includes(p) ? 'prefix' : 'exact',
       path: p,
       handler: (req, res) => { try { compatApi(String(req.url ?? '/').split('?')[0], req, res, deps) } catch (e) { res.writeHead(500); res.end(String(e)) } },
     }))
@@ -392,6 +404,27 @@ export function apply(ctx) {
       let out = ''
       child.stdout.on('data', (d) => { out += d }); child.stderr.on('data', (d) => { out += d })
       child.on('close', () => { try { resolve(JSON.parse(out.trim().split('\n').pop())) } catch { resolve({ loggedIn: false }) } })
+    })
+  }
+
+
+  const analyticsCache = new Map()
+  function fetchAccountStats(platform) {
+    const key = platform
+    const hit = analyticsCache.get(key)
+    if (hit && Date.now() - hit.at < 5 * 60000) return Promise.resolve(hit.data)
+    return new Promise((resolve) => {
+      const py = process.env.PYTHON ?? 'python3'
+      const script = join(ROOT, 'skills', 'shared', 'scripts', 'account_stats.py')
+      const child = spawn(py, [script, 'fetch', '--platform', platform], { cwd: ROOT, env: process.env })
+      let out = ''
+      child.stdout.on('data', (d) => { out += d }); child.stderr.on('data', (d) => { out += d })
+      child.on('close', () => {
+        let data = {}
+        try { data = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) } catch { data = { platform, loggedIn: false, error: out.slice(-300) } }
+        analyticsCache.set(key, { at: Date.now(), data })
+        resolve(data)
+      })
     })
   }
 
@@ -442,7 +475,7 @@ export function apply(ctx) {
     })
   }
 
-  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir }
+  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats }
 
   const runs = attachRuns(ctx, getTemplate)
   const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt), publishVideo)
