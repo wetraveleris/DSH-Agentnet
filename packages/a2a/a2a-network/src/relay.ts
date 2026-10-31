@@ -38,7 +38,7 @@ export interface RelayHandle {
 
 const AGENT_ID = /^[A-Za-z0-9_-]{1,64}$/
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024 + 1024 * 1024
-const DEFAULT_REQUEST_TIMEOUT_MS = 90_000
+const DEFAULT_REQUEST_TIMEOUT_MS = 180_000
 const HOP_HEADERS = new Set(['connection', 'content-length', 'host', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade'])
 
 function rawText(raw: RawData): string {

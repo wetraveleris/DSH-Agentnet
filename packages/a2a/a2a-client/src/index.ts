@@ -63,7 +63,7 @@ export interface Config {
 }
 
 const DEFAULT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
+const DEFAULT_REQUEST_TIMEOUT_MS = 180_000
 const SHA256_PATTERN = /^[0-9a-f]{64}$/
 
 const AgentConfig = z.object({
