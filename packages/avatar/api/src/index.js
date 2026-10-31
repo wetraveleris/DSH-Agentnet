@@ -143,7 +143,10 @@ import { fileURLToPath } from 'node:url'
     if (pathname === '/api/chat/stream' && req.method === 'POST') { deps.chatStream(req, res); return }
     if (pathname === '/api/chat/stop' && req.method === 'POST') { deps.chatStop(req, res); return }
     if (pathname.startsWith('/api/chat/last/')) { json(200, { status: 'done', text: '' }); return }
-    if (pathname.startsWith('/api/chat/jobs/')) { json(404, { detail: '任务记录已失效，请重新发送' }); return }
+    if (pathname.startsWith('/api/chat/jobs/')) {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+      res.write('id: 0\nevent: done\ndata: {}\n\n'); res.end(); return
+    }
     const tm = /^\/api\/templates\/([^/]+)\/(save|versions|rollback|run)$/.exec(pathname)
     if (tm) {
       const id = decodeURIComponent(tm[1]); const action = tm[2]
@@ -619,7 +622,7 @@ export function apply(ctx) {
           }
         }
         set.add(fn)
-        req.on('close', () => { clearTimeout(guard); set.delete(fn) })
+        res.on('close', () => { clearTimeout(guard); set.delete(fn) })
         const hist = history.get(sid) ?? []; hist.push({ role: 'user', text: message }); history.set(sid, hist)
         handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: message }], source: { kind: 'user' } })
       } catch (e) {
@@ -816,7 +819,7 @@ export function apply(ctx) {
         }
         set.add(fn)
         const hb = setInterval(() => { try { res.write(': hb\n\n') } catch {} }, 15000)
-        req.on('close', () => { clearInterval(hb); set.delete(fn) })
+        res.on('close', () => { clearInterval(hb); set.delete(fn) })
         return
       }
       if (u.pathname === '/api/avatar/events') {
