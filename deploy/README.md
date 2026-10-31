@@ -6,6 +6,7 @@ mkdir -p /opt/avatar && cd /opt/avatar
 npm i @deepseek-ai/dsh@0.2.1-rc.5
 # 复制 packages/avatar/* 到 /opt/avatar/packages/avatar/
 # 创建 profile：/root/.dsh/profiles/avatar/{package.json,cordis.yml,cordis.patch.yml}
+# 依赖用 link: 指向 /opt/avatar/packages/avatar/*（file: 会复制，更新不生效）
 cd /root/.dsh/profiles/avatar && pnpm install
 ```
 
