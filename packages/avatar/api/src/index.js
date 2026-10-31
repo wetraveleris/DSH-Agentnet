@@ -48,6 +48,35 @@ function listSkills() {
   }).sort((a, b) => a.id.localeCompare(b.id))
 }
 
+
+function listOutputTree() {
+  const rootDir = join(ROOT, 'outputs')
+  if (!existsSync(rootDir)) return []
+  const kindOf = (n) => { const e = n.slice(n.lastIndexOf('.') + 1).toLowerCase(); return ['mp4','mov','webm'].includes(e) ? 'video' : ['mp3','wav','m4a'].includes(e) ? 'audio' : ['jpg','jpeg','png','webp','gif'].includes(e) ? 'image' : ['srt','txt','md','json'].includes(e) ? 'text' : 'other' }
+  const nodes = []
+  for (const top of readdirSync(rootDir)) {
+    if (top.startsWith('_') || top === 'node_modules') continue
+    const f = join(rootDir, top); let st
+    try { st = statSync(f) } catch { continue }
+    if (st.isFile()) { nodes.push({ name: top, type: 'file', path: top, kind: kindOf(top), size: st.size, mtime: st.mtimeMs }); continue }
+    const children = []
+    const walk = (d, rel, depth2) => {
+      if (depth2 > 3) return
+      for (const n of readdirSync(d)) {
+        if (n.startsWith('.')) continue
+        const p2 = join(d, n), r2 = rel + '/' + n
+        let s2; try { s2 = statSync(p2) } catch { continue }
+        if (s2.isDirectory()) walk(p2, r2, depth2 + 1)
+        else children.push({ name: n, type: 'file', path: r2, kind: kindOf(n), size: s2.size, mtime: s2.mtimeMs })
+      }
+    }
+    walk(f, top, 0)
+    if (!children.length) continue
+    nodes.push({ name: top, type: 'dir', path: top, fileCount: children.length, children: children.sort((a, b) => b.mtime - a.mtime).slice(0, 40), mtime: st.mtimeMs })
+  }
+  return nodes.sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0))
+}
+
 function listOutputs() {
   const dir = join(ROOT, 'outputs')
   const out = []
@@ -99,7 +128,15 @@ import { fileURLToPath } from 'node:url'
       return json(200, { gateway: true, transport: 'dsh', runtime: 'dsh', skills: listSkills().map((x) => ({ name: x.id, description: x.description, layer: 'builtin', needsApi: false })), personas: [] })
     }
     if (pathname === '/api/skills') return json(200, listSkills().map((x) => ({ name: x.id, description: x.description, layer: 'builtin', needsApi: false })))
-    if (pathname === '/api/outputs') return json(200, listOutputs().map((o) => ({ path: o.path.replace(/^outputs\//, ''), name: o.name, size: o.size, mtime: o.mtime })))
+    if (pathname === '/api/outputs') return json(200, listOutputTree())
+    if (pathname === '/api/output/content') {
+      const q = new URL(String(req.url ?? '/'), 'http://x').searchParams.get('path') ?? ''
+      const f = join(ROOT, 'outputs', q)
+      if (!existsSync(f) || !statSync(f).isFile()) return json(404, { detail: 'not found' })
+      const ext = f.slice(f.lastIndexOf('.')).toLowerCase()
+      const isBinary = ['.mp4','.mov','.webm','.mp3','.wav','.png','.jpg','.jpeg','.webp','.gif'].includes(ext)
+      return json(200, { path: q, content: isBinary ? '' : readFileSync(f, 'utf8').slice(0, 200000), kind: ext.replace('.', ''), isBinary })
+    }
     if (pathname === '/api/templates') return json(200, { templates: listTemplates() })
     if (pathname.startsWith('/api/templates/')) {
       const id = decodeURIComponent(pathname.slice('/api/templates/'.length))
