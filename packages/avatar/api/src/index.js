@@ -88,8 +88,13 @@ function listAccounts() {
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-  function compatApi(pathname, req, res, agentd) {
+  function compatApi(pathname, req, res, deps) {
+    const agentd = deps.agentd
     const json = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
+    if (pathname === '/api/chat/stream' && req.method === 'POST') { deps.chatStream(req, res); return }
+    if (pathname === '/api/chat/stop' && req.method === 'POST') { deps.chatStop(req, res); return }
+    if (pathname.startsWith('/api/chat/last/')) { json(200, { status: 'done', text: '' }); return }
+    if (pathname.startsWith('/api/chat/jobs/')) { json(404, { detail: '任务记录已失效，请重新发送' }); return }
     if (pathname === '/api/status') {
       return json(200, { gateway: true, transport: 'dsh', runtime: 'dsh', skills: listSkills().map((x) => ({ name: x.id, description: x.description, layer: 'builtin', needsApi: false })), personas: [] })
     }
@@ -232,11 +237,11 @@ export function apply(ctx) {
   }
 
 
-  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts']) {
+  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/media', '/api/output', '/api/accounts', '/api/chat']) {
     ctx.effect(() => ctx.webServer.register({
-      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts'].includes(p) ? 'prefix' : 'exact',
+      kind: ['/api/media', '/api/output', '/api/templates', '/api/agentd', '/api/sessions', '/api/artifacts', '/api/accounts', '/api/chat'].includes(p) ? 'prefix' : 'exact',
       path: p,
-      handler: (req, res) => { try { compatApi(String(req.url ?? '/').split('?')[0], req, res, agentd) } catch (e) { res.writeHead(500); res.end(String(e)) } },
+      handler: (req, res) => { try { compatApi(String(req.url ?? '/').split('?')[0], req, res, deps) } catch (e) { res.writeHead(500); res.end(String(e)) } },
     }))
   }
   ctx.effect(() => ctx.webServer.register({
@@ -245,10 +250,60 @@ export function apply(ctx) {
       const pathname = String(req.url ?? '/').split('?')[0]
       if (pathname === '/avatar/app') { res.writeHead(301, { location: '/avatar/app/' }); res.end(); return }
       const rest = pathname.slice('/avatar/app'.length)
-      if (rest.startsWith('/api/')) { compatApi(rest, req, res, agentd); return }
+      if (rest.startsWith('/api/')) { compatApi(rest, req, res, deps); return }
       serveApp(pathname, req, res)
     },
   }))
+
+
+  async function chatStream(req, res) {
+    let b = ''; req.on('data', (c) => { b += c })
+    req.on('end', async () => {
+      const write = (id, event, payload) => { try { res.write(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(payload)}\n\n`) } catch {} }
+      try {
+        const payload = JSON.parse(b || '{}')
+        const message = String(payload.message ?? '')
+        const sid = String(payload.sessionId ?? '') || ('avatar-' + randomUUID())
+        const handle = await ensureAgent(sid)
+        res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+        const set = subs.get(sid) ?? new Set(); subs.set(sid, set)
+        let closed = false
+        const finish = () => { if (!closed) { closed = true; write(0, 'done', { sessionKey: sid }); res.end() } }
+        const fn = (e) => {
+          const t = e?.type
+          if (t === 'assistant/message') {
+            const parts = e.data?.message?.content ?? []
+            const text = parts.filter((p) => p.type === 'text').map((p) => p.text).join('')
+            const reasoning = parts.filter((p) => p.type === 'reasoning').map((p) => p.text).join('')
+            if (reasoning) write(1, 'thinking', reasoning)
+            if (text) write(2, 'token', text)
+          } else if (t === 'tool/call') write(3, 'step', { id: e.data?.name ?? 'tool', label: e.data?.name ?? '工具', state: 'running' })
+          else if (t === 'tool/result') write(4, 'step', { id: 'tool', label: '工具', state: 'done' })
+          else if (t === 'turn/end') {
+            const r = e.data?.reason
+            if (r?.kind === 'error') { write(5, 'error', String(r.error?.message ?? '执行失败')); closed = true; res.end() }
+            else finish()
+          }
+        }
+        set.add(fn)
+        req.on('close', () => { set.delete(fn) })
+        const hist = history.get(sid) ?? []; hist.push({ role: 'user', text: message }); history.set(sid, hist)
+        handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: message }], source: { kind: 'user' } })
+      } catch (e) {
+        try { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ detail: String(e?.message ?? e) })) } catch {}
+      }
+    })
+  }
+
+  function chatStop(req, res) {
+    let b = ''; req.on('data', (c) => { b += c })
+    req.on('end', () => {
+      try { const sid = JSON.parse(b || '{}').sessionId; const h = agents.get(String(sid)); h?.agent?.cancel?.('user-stop') } catch {}
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ stopped: true }))
+    })
+  }
+
+  const deps = { get agentd() { return agentd }, chatStream, chatStop }
 
   const runs = attachRuns(ctx, getTemplate)
   const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt), publishVideo)
