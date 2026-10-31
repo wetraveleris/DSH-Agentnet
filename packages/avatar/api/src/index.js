@@ -85,6 +85,67 @@ function listAccounts() {
   }).filter(Boolean)
 }
 
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+  function compatApi(pathname, req, res, agentd) {
+    const json = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
+    if (pathname === '/api/status') {
+      return json(200, { gateway: true, transport: 'dsh', runtime: 'dsh', skills: listSkills().map((x) => ({ name: x.id, description: x.description, layer: 'builtin', needsApi: false })), personas: [] })
+    }
+    if (pathname === '/api/skills') return json(200, listSkills().map((x) => ({ name: x.id, description: x.description, layer: 'builtin', needsApi: false })))
+    if (pathname === '/api/outputs') return json(200, listOutputs().map((o) => ({ path: o.path.replace(/^outputs\//, ''), name: o.name, size: o.size, mtime: o.mtime })))
+    if (pathname === '/api/templates') return json(200, { templates: listTemplates() })
+    if (pathname.startsWith('/api/templates/')) {
+      const id = decodeURIComponent(pathname.slice('/api/templates/'.length))
+      const t = getTemplate(id)
+      return json(t ? 200 : 404, t ?? { detail: '模板不存在' })
+    }
+    if (pathname.startsWith('/api/agentd/')) {
+      const sub = pathname.slice('/api/agentd/'.length)
+      if (sub === 'panel') return json(200, agentd.panel())
+      if (sub === 'mode') { let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => { try { agentd.setMode(JSON.parse(b || '{}').mode); json(200, { mode: agentd.panel().mode }) } catch (e) { json(400, { detail: String(e) }) } }); return }
+      if (sub === 'away') { void agentd.generatePlan('老板离开，给接下来 6–8 小时的自主安排，从当前时间起'); return json(200, { ok: true }) }
+      if (sub === 'plan/approve') { try { return json(200, { plan: agentd.approvePlan() }) } catch (e) { return json(400, { detail: String(e?.message ?? e) }) } }
+      if (sub === 'plan/generate') { void agentd.generatePlan(''); return json(200, { ok: true }) }
+      if (sub === 'plan/revise') { let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => { const ins = JSON.parse(b || '{}').instruction ?? ''; void agentd.generatePlan(String(ins)); json(200, { ok: true }) }); return }
+      const m = /^cards\/([^/]+)\/resolve$/.exec(sub)
+      if (m) { let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => { try { agentd.resolveCard(decodeURIComponent(m[1]), JSON.parse(b || '{}').action ?? 'ok'); json(200, { ok: true }) } catch (e) { json(400, { detail: String(e?.message ?? e) }) } }); return }
+    }
+    const stubs = {
+      '/api/trends': { trends: [], updated: 0 },
+      '/api/schedule': [],
+      '/api/schedule/context': {},
+      '/api/sessions': { sessions: [] },
+      '/api/settings/bootstrap': {},
+      '/api/settings/harness': { runtime: 'dsh', models: {}, sandbox: 'workspace-write', codex_auto_approve: false, locked: false, agents: [] },
+      '/api/ideas': [],
+      '/api/analytics/platforms': {},
+      '/api/personas': [],
+      '/api/profile': {},
+      '/api/publishing-policy': {},
+      '/api/upload/limits': { maxBytes: 104857600 },
+    }
+    if (pathname in stubs) return json(200, stubs[pathname])
+    if (pathname === '/api/accounts') return json(200, listAccounts().map((a) => ({ platform: String(a.file).replace(/\.json$/, ''), loggedIn: a.state === 'success' || a.state === 'ok', name: a.message })))
+    return json(404, { detail: 'not found' })
+  }
+
+  function serveApp(pathname, req, res) {
+    const distDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist-app')
+    const assets = join(distDir, 'assets')
+    if (pathname.startsWith('/avatar/app/assets/')) {
+      const f = join(assets, pathname.slice('/avatar/app/assets/'.length))
+      if (existsSync(f)) {
+        const mime = f.endsWith('.js') ? 'text/javascript' : f.endsWith('.css') ? 'text/css' : f.endsWith('.svg') ? 'image/svg+xml' : 'application/octet-stream'
+        res.writeHead(200, { 'content-type': mime }); res.end(readFileSync(f)); return
+      }
+    }
+    const idx = join(distDir, 'index.html')
+    if (existsSync(idx)) { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(readFileSync(idx)) }
+    else { res.writeHead(404); res.end('ui not built') }
+  }
+
 export function apply(ctx) {
 
   async function ensureAgent(sid) {
@@ -132,6 +193,25 @@ export function apply(ctx) {
       } catch (e) { resolve({ ok: false, state: 'failed', message: String(e?.message ?? e) }) }
     })
   }
+
+
+  for (const p of ['/api/status', '/api/skills', '/api/outputs', '/api/templates', '/api/templates/', '/api/agentd', '/api/sessions', '/api/artifacts']) {
+    ctx.effect(() => ctx.webServer.register({
+      kind: p.endsWith('/') || p === '/api/templates' || p === '/api/agentd' ? 'prefix' : 'exact',
+      path: p,
+      handler: (req, res) => { try { compatApi(String(req.url ?? '/').split('?')[0], req, res, agentd) } catch (e) { res.writeHead(500); res.end(String(e)) } },
+    }))
+  }
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix', path: '/avatar/app',
+    handler: (req, res) => {
+      const pathname = String(req.url ?? '/').split('?')[0]
+      if (pathname === '/avatar/app') { res.writeHead(301, { location: '/avatar/app/' }); res.end(); return }
+      const rest = pathname.slice('/avatar/app'.length)
+      if (rest.startsWith('/api/')) { compatApi(rest, req, res, agentd); return }
+      serveApp(pathname, req, res)
+    },
+  }))
 
   const runs = attachRuns(ctx, getTemplate)
   const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt), publishVideo)
@@ -308,6 +388,7 @@ export function apply(ctx) {
       if (u.pathname === '/api/avatar/outputs') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ outputs: listOutputs() })); return }
       if (u.pathname === '/api/avatar/profiles') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ profiles: listProfiles() })); return }
       if (u.pathname === '/api/avatar/accounts') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ accounts: listAccounts() })); return }
+      if (u.pathname === '/api' || u.pathname.startsWith('/api/')) { compatApi(u.pathname, req, res); return }
       if (u.pathname === '/api/avatar/agentd/panel') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify(agentd.panel()))
