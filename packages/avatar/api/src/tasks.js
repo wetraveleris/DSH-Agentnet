@@ -1,6 +1,6 @@
 // 任务编排：主编把需求变成任务图（DAG），执行器按依赖拓扑执行
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { ROLES, ROLE_IDS } from './roles.js'
 
@@ -78,6 +78,34 @@ export function attachTasks(runAgent) {
       const failed = t.nodes.find((n) => n.state === 'failed')
       if (failed && failed.role !== 'critic') { t.status = 'failed'; t.error = failed.error; save(t); return }
     }
+    // 验收回退：critic 说“不通过/需修改” → 重跑上游产出节点一次，再复审
+    const critic = t.nodes.find((n) => n.role === 'critic' && n.state === 'done')
+    if (critic && /不通过|需修改|不合格|问题清单|退回/.test(critic.output) && !t.reworked) {
+      const producer = t.nodes.filter((n) => n.state === 'done' && n.id !== critic.id && n.role !== 'critic').pop()
+      if (producer) {
+        t.reworked = true
+        producer.rework = critic.output.slice(0, 1200)
+        producer.state = 'pending'; producer.output = ''
+        critic.state = 'pending'; critic.output = ''
+        save(t)
+        for (const n of [producer, critic]) await runNode(t, n)
+      }
+    }
+    // 收集产物
+    const since = t.createdAt
+    const arts = []
+    const walk = (d, depth) => {
+      if (depth > 4 || !existsSync(d)) return
+      for (const n of readdirSync(d)) {
+        if (n.startsWith('_') || n === 'node_modules') continue
+        const f = join(d, n); let st
+        try { st = statSync(f) } catch { continue }
+        if (st.isDirectory()) walk(f, depth + 1)
+        else if (/\.(mp4|png|jpe?g|mp3|wav|srt)$/i.test(n) && st.size > 10 * 1024 && st.mtimeMs >= since - 5000) arts.push(f.slice(ROOT.length + 1))
+      }
+    }
+    walk(join(ROOT, 'outputs'), 0)
+    t.artifacts = arts.slice(0, 10)
     const failed = t.nodes.find((n) => n.state === 'failed')
     t.status = failed ? 'partial' : 'done'
     t.finishedAt = Date.now(); save(t)

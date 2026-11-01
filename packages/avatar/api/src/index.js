@@ -680,7 +680,7 @@ export function apply(ctx) {
     })
   }
 
-  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, feishuEvent, publishVideo, get history() { return history }, get feishuAppId() { return feishuAppId }, get feishuSecret() { return feishuSecret }, sendMedia, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
+  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, feishuEvent, publishVideo, get startTask() { return tasks.start }, get getTask() { return tasks.get }, get history() { return history }, get feishuAppId() { return feishuAppId }, get feishuSecret() { return feishuSecret }, sendMedia, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
 
 
   const stepsFile = () => join(ROOT, 'outputs', '_steps', '_all.jsonl')
@@ -777,6 +777,32 @@ export function apply(ctx) {
     }
   }
 
+
+  async function sendTaskResult(appId, secret, chatId, t) {
+    const lines = [`任务 ${t.id} ${t.status === 'done' ? '完成' : t.status === 'partial' ? '部分完成' : '失败'}：${t.summary}`]
+    for (const n of t.nodes) lines.push(`- [${n.role}] ${n.state}${n.output ? '：' + n.output.slice(0, 120).replace(/\n/g, ' ') : ''}`)
+    await sendText(appId, secret, chatId, lines.join('\n'))
+    for (const a of (t.artifacts ?? []).slice(0, 3)) {
+      const abs = join(ROOT, a)
+      if (!existsSync(abs)) continue
+      if (/\.mp4$/i.test(a) && statSync(abs).size > 100 * 1024) {
+        try {
+          const key = await uploadFile(appId, secret, readFileSync(abs), a.split('/').pop(), 'mp4')
+          await sendPayload(appId, secret, chatId, 'media', { file_key: key, file_name: a.split('/').pop() })
+        } catch {}
+      } else if (/\.(png|jpe?g)$/i.test(a)) {
+        try {
+          const key = await uploadImage(appId, secret, readFileSync(abs), a.split('/').pop())
+          await sendPayload(appId, secret, chatId, 'image', { image_key: key })
+        } catch {}
+      }
+    }
+  }
+
+  function debsTask(text) {
+    return text.length >= 8 && /做|查|写|剪|发布|调研|生成|整理|分析/.test(text) && !/^(状态|计划|批准|通过|打回|媒体|视频|图片|音乐)/.test(text)
+  }
+
   async function processFeishu(text, chatId) {
     const flog = (o) => { try { appendFileSync(join(ROOT, 'outputs', '_feishu', 'handler.log'), JSON.stringify({ ts: Date.now(), ...o }) + '\n') } catch {} }
     flog({ step: 'enter', text: text.slice(0, 40), chatId })
@@ -838,6 +864,19 @@ export function apply(ctx) {
         const m = /^(通过|打回)\s+(\S+)/.exec(text)
         if (m) {
           try { agentd.resolveCard(m[2], m[1] === '通过' ? 'approve' : 'reject'); await sendText(appId, secret, chatId, `已${m[1]}：${m[2]}`) } catch (e) { await sendText(appId, secret, chatId, `操作失败：${String(e?.message ?? e)}`) }
+          return
+        }
+        // 任务型需求：自动编排
+        if (debsTask(text)) {
+          const t = await deps.startTask(text)
+          await sendText(appId, secret, chatId, `已接任务 ${t.id}：${t.summary}\n节点：${t.nodes.map((n) => n.role).join(' → ')}\n完成后我把结果发给你。`)
+          for (let i = 0; i < 160; i++) {
+            await new Promise((r) => setTimeout(r, 3000))
+            const cur = deps.getTask(t.id)
+            if (!cur) break
+            if (['done', 'partial', 'failed'].includes(cur.status)) { await sendTaskResult(appId, secret, chatId, cur); return }
+          }
+          await sendText(appId, secret, chatId, '任务还在跑，完成后我再发结果。')
           return
         }
         // 普通对话：走主编写会话
