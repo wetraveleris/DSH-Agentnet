@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, readdirSync, readFileSync, existsSync, statSync, createReadStream, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import { attachRuns, runAgentOnce } from './runs.js'
 import { attachAgentd } from './agentd.js'
 import { sendText, parseText, tenantToken, uploadImage, uploadFile, sendPayload, sendCard, approvalCard } from './feishu.js'
@@ -658,7 +658,7 @@ export function apply(ctx) {
     })
   }
 
-  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, feishuEvent, get feishuAppId() { return feishuAppId }, get feishuSecret() { return feishuSecret }, sendMedia, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
+  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, feishuEvent, publishVideo, get feishuAppId() { return feishuAppId }, get feishuSecret() { return feishuSecret }, sendMedia, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
 
 
   const stepsFile = () => join(ROOT, 'outputs', '_steps', '_all.jsonl')
@@ -713,7 +713,7 @@ export function apply(ctx) {
     const out = { video: [], image: [], audio: [] }
     const walk = (list) => {
       for (const n of list) {
-        if (n.type === 'file') { const k = n.kind || (/\.(mp4|mov|webm)$/i.test(n.name) ? 'video' : /\.(png|jpe?g|webp)$/i.test(n.name) ? 'image' : /\.(mp3|wav|m4a)$/i.test(n.name) ? 'audio' : 'other'); if (out[k]) out[k].push(n) }
+        if (n.type === 'file' && (n.size ?? 0) > 100 * 1024) { const k = n.kind || (/\.(mp4|mov|webm)$/i.test(n.name) ? 'video' : /\.(png|jpe?g|webp)$/i.test(n.name) ? 'image' : /\.(mp3|wav|m4a)$/i.test(n.name) ? 'audio' : 'other'); if (out[k]) out[k].push(n) }
         if (n.children) walk(n.children)
       }
     }
@@ -733,7 +733,21 @@ export function apply(ctx) {
         await sendPayload(appId, secret, chatId, 'image', { image_key: key })
       } else if (kind === 'video') {
         const key = await uploadFile(appId, secret, buf, f.name, 'mp4')
-        await sendPayload(appId, secret, chatId, 'media', { file_key: key, file_name: f.name })
+        let imageKey = ''
+        let duration = 0
+        try {
+          const cover = join('/tmp', 'cover-' + Date.now() + '.jpg')
+          execFileSync('ffmpeg', ['-y', '-v', 'error', '-ss', '0', '-i', abs, '-frames:v', '1', '-vf', 'scale=720:-2', cover], { timeout: 20000 })
+          imageKey = await uploadImage(appId, secret, readFileSync(cover), 'cover.jpg')
+          const probe = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', abs], { timeout: 10000 }).toString().trim()
+          duration = Math.round(Number(probe || 0) * 1000)
+        } catch {}
+        try {
+          await sendPayload(appId, secret, chatId, 'media', { file_key: key, image_key: imageKey, duration: duration > 0 ? duration : 1000, file_name: f.name })
+        } catch (e) {
+          const fk = await uploadFile(appId, secret, buf, f.name, 'stream')
+          await sendPayload(appId, secret, chatId, 'file', { file_key: fk, file_name: f.name })
+        }
       } else {
         const key = await uploadFile(appId, secret, buf, f.name, 'stream')
         await sendPayload(appId, secret, chatId, 'file', { file_key: key, file_name: f.name })
@@ -770,6 +784,7 @@ export function apply(ctx) {
     if (msg.message_id) { feishuSeen.add(msg.message_id); if (feishuSeen.size > 2000) feishuSeen.clear() }
     if (String(msg.sender?.sender_type ?? '') === 'app') return {}
     const chatId = msg.chat_id
+    if (chatId) { try { mkdirSync(join(ROOT, 'outputs', '_feishu'), { recursive: true }); writeFileSync(join(ROOT, 'outputs', '_feishu', 'chat.json'), JSON.stringify({ chatId, at: Date.now() })) } catch {} }
     const text = parseText(msg)
     if (!chatId || !text) return {}
     void (async () => {
@@ -789,6 +804,18 @@ export function apply(ctx) {
           return
         }
         if (/^(视频|video)$/i.test(text)) { await sendMedia(appId, secret, chatId, 'video', 3); return }
+        if (/^(发布|发抖音|发布视频|publish)$/i.test(text)) {
+          const vids = mediaFiles().video
+          if (!vids.length) { await sendText(appId, secret, chatId, '没有找到可发布的成片（需要 >100KB 的 mp4）'); return }
+          const v = vids[0]
+          const real = process.env.AVATAR_PUBLISH === '1'
+          await sendText(appId, secret, chatId, `${real ? '开始真发' : '开始 dry-run'}：${v.path}（${(v.size / 1024 / 1024).toFixed(1)}MB）`)
+          let title = (v.path.split('/').slice(-2)[0] || '今日更新').slice(0, 20)
+          if (/^\d{4}-\d{2}-\d{2}/.test(title)) title = 'NBA 复盘｜' + title.slice(5).replace('-', '.')
+          const r = await deps.publishVideo({ video: join(ROOT, 'outputs', v.path), title, content: title, tags: 'NBA', exec: true })
+          await sendText(appId, secret, chatId, r.ok ? `✅ 发布${r.dryRun ? '（dry-run）' : '成功'}：${r.message || r.state}` : `❌ 发布失败：${r.message || String(r.output ?? '').slice(-200)}`)
+          return
+        }
         if (/^(图片|照片|image)$/i.test(text)) { await sendMedia(appId, secret, chatId, 'image', 6); return }
         if (/^(音乐|音频|audio)$/i.test(text)) { await sendMedia(appId, secret, chatId, 'audio', 3); return }
         if (/^(状态|status)$/i.test(text)) {
@@ -824,10 +851,13 @@ export function apply(ctx) {
         }
         // 普通对话：走主编写会话
         const sid = 'feishu-' + chatId
+        await sendText(appId, secret, chatId, '收到，主编处理中…')
         const handle = await ensureAgent(sid)
         let answer = ''
+        let reason = ''
         const off = ctx.on('session/event', (se, e) => {
           if (String(se?.id) !== sid) return
+          if (e.type === 'turn/end') { const r = e.data?.reason; if (r?.kind === 'error') reason = String(r.error?.message ?? '执行失败') }
           if (e.type === 'assistant/message') {
             const parts = e.data?.message?.content ?? []
             const t = parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
@@ -837,7 +867,8 @@ export function apply(ctx) {
         handle.agent.followup({ id: String(Date.now()), role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
         await Promise.race([handle.agent.whenIdle(), new Promise((r) => setTimeout(r, 180000))])
         off()
-        await sendText(appId, secret, chatId, answer || '（没有生成回复，请重试）')
+        flog({ step: 'replied', length: answer.length, reason })
+        await sendText(appId, secret, chatId, answer || `（主编这轮没有产出内容${reason ? '：' + reason : '，可能模型或工具超时'}）`)
       } catch (e) {
         flog({ step: 'error', message: String(e?.message ?? e) })
         try { await sendText(feishuAppId(), feishuSecret(), chatId, `出错了：${String(e?.message ?? e)}`) } catch (e2) { flog({ step: 'send-error', message: String(e2?.message ?? e2) }) }
@@ -846,6 +877,67 @@ export function apply(ctx) {
     return {}
   }
 
+
+  const activeChat = () => { try { return JSON.parse(readFileSync(join(ROOT, 'outputs', '_feishu', 'chat.json'), 'utf8')).chatId } catch { return '' } }
+  let eventsOffset = -1
+  async function pushEvents() {
+    const appId = feishuAppId(); const secret = feishuSecret()
+    const chat = activeChat()
+    if (!appId || !secret || !chat) return
+    const f = join(ROOT, 'outputs', '_agentd', 'events.jsonl')
+    if (!existsSync(f)) return
+    const buf = readFileSync(f, 'utf8')
+    if (eventsOffset < 0) { eventsOffset = buf.length; return }
+    if (buf.length <= eventsOffset) return
+    const chunk = buf.slice(eventsOffset); eventsOffset = buf.length
+    for (const line of chunk.split('\n').filter(Boolean)) {
+      let ev; try { ev = JSON.parse(line) } catch { continue }
+      try {
+        if (ev.event === 'job.done') {
+          await sendText(appId, secret, chat, `✅ 完成：${ev.title}`)
+          const wantMedia = /edit|publish|assets/.test(String(ev.jobType ?? '')) || /剪辑|成片|发布/.test(String(ev.title ?? ''))
+          if (wantMedia) {
+            const dir = join(ROOT, 'outputs')
+            let best = null
+            const walk = (d, depth) => {
+              if (depth > 4 || !existsSync(d)) return
+              for (const n of readdirSync(d)) {
+                if (n.startsWith('_') || n === 'node_modules') continue
+                const f = join(d, n); let st
+                try { st = statSync(f) } catch { continue }
+                if (st.isDirectory()) walk(f, depth + 1)
+                else if (/\.mp4$/i.test(n) && st.size > 100 * 1024 && Date.now() - st.mtimeMs < 60 * 60000) {
+                  if (!best || st.mtimeMs > best.mtime) best = { path: f, mtime: st.mtimeMs }
+                }
+              }
+            }
+            walk(dir, 0)
+            if (best) {
+              try {
+                const key = await uploadFile(appId, secret, readFileSync(best.path), best.path.split('/').pop(), 'mp4')
+                await sendPayload(appId, secret, chat, 'media', { file_key: key, file_name: best.path.split('/').pop() })
+              } catch (e) { await sendText(appId, secret, chat, `成片发送失败：${String(e?.message ?? e)}`) }
+            }
+          }
+        }
+        else if (ev.event === 'job.failed') await sendText(appId, secret, chat, `⚠️ 失败：${ev.title}\n${String(ev.error ?? '').slice(0, 120)}`)
+        else if (ev.event === 'card.created') {
+          const cards = (agentd.panel().cards ?? []).filter((c) => c.id === ev.id || c.title === ev.title)
+          const target = cards.length ? cards : (agentd.panel().cards ?? [])
+          if (target.length) {
+            const card = approvalCard(ev.title ?? '待确认', target.map((c) => `**${c.title}**\n${String(c.body ?? '').slice(0, 80)}`).join('\n\n'), target.flatMap((c) => [
+              { label: '通过', type: 'primary', value: { action: 'approve', cardId: c.id } },
+              { label: '打回', type: 'danger', value: { action: 'reject', cardId: c.id } },
+            ]))
+            await sendCard(appId, secret, chat, card)
+          }
+        } else if (ev.event === 'publish.done') await sendText(appId, secret, chat, `🚀 发布成功：${String(ev.message ?? '').slice(0, 100)}`)
+        else if (ev.event === 'publish.failed') await sendText(appId, secret, chat, `❌ 发布失败：${String(ev.message ?? '').slice(0, 100)}`)
+      } catch (e) { /* ignore single push error */ }
+    }
+  }
+
+  ctx.effect(() => { const t = setInterval(() => { void pushEvents() }, 10000); return () => clearInterval(t) })
   const runs = attachRuns(ctx, getTemplate)
   const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt), publishVideo)
   ctx.effect(() => { const t = setInterval(() => { try { agentd.tick() } catch {} }, 15000); return () => clearInterval(t) })

@@ -35,12 +35,22 @@ export async function runAgentOnce(ctx, prompt, opts = {}) {
       if (opts.tools === 'none') agentCtx.tools.restrict({ allow: [] })
     }
   }
-  const handle = await ctx.agents.create({
+  let handle
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      handle = await ctx.agents.create({
     sessionId: sid,
     agentOptions: { provider: opts.provider ?? 'deepseek-official', model: opts.model ?? 'deepseek-v4-flash' },
     meta: { cwd: ROOT, ...(presetId ? { agentPreset: presetId } : {}) },
     ...(setup ? { setup } : {}),
-  })
+      })
+      break
+    } catch (e) {
+      if (!/no agent factory/i.test(String(e?.message ?? e))) throw e
+      await new Promise((r) => setTimeout(r, 2000))
+    }
+  }
+  if (!handle) throw new Error('agent 运行时未就绪')
   let text = ''
   const off = ctx.on('session/event', (session, ev) => {
     if (String(session?.id ?? session) !== sid) return

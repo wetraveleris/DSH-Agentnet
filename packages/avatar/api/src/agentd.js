@@ -10,7 +10,7 @@ const writeJson = (f, v) => { mkdirSync(join(f, '..'), { recursive: true }); wri
 const nowHHMM = () => new Date().toTimeString().slice(0, 5)
 
 const TYPE_GATE = { review: 'review', publish: 'approval' }
-const TOOL_POLICY = { topic: 'none', script: 'none', report: 'none', sync: 'none', improve: 'none', monitor: 'none', assets: 'all', edit: 'all', review: 'all', publish: 'all' }
+const TOOL_POLICY = { topic: 'none', script: 'none', improve: 'none', monitor: 'none', assets: 'all', edit: 'all', review: 'all', publish: 'all', report: 'all', sync: 'all' }
 
 export function attachAgentd(ctx, runAgent, publishVideo) {
   try {
@@ -100,8 +100,23 @@ export function attachAgentd(ctx, runAgent, publishVideo) {
   }
 
   let busy = false
+  function repairWaitingCards() {
+    const list = readJson(jobsFile(), { jobs: [] })
+    const pending = readJson(cardsFile(), []).filter((c) => c.status === 'pending')
+    let changed = false
+    for (const j of list.jobs) {
+      if (j.state !== 'waiting') continue
+      if (pending.some((c) => c.jobId === j.id)) continue
+      const lv = latestVideo()
+      addCard({ type: j.type === 'publish' ? 'approval' : 'review', jobId: j.id, title: j.title, body: '确认后继续', artifacts: lv ? [lv] : [] })
+      changed = true
+    }
+    void changed
+  }
+
   async function dispatch() {
     if (busy || mode() !== 'auto') return
+    repairWaitingCards()
     const p = plan(); if (!p || p.status !== 'approved') return
     const list = readJson(jobsFile(), { jobs: [] })
     const job = list.jobs.find((j) => j.state === 'pending')
@@ -111,13 +126,15 @@ export function attachAgentd(ctx, runAgent, publishVideo) {
     try {
       if (job.type === 'review' || job.type === 'publish') {
         const latest = latestVideo()
+        job.state = 'waiting'; writeJson(jobsFile(), list)
         addCard({ type: job.type === 'publish' ? 'approval' : 'review', jobId: job.id, title: job.title, body: '确认后继续', artifacts: latest ? [latest] : [] })
         record('agent', `等你确认：${job.title}`)
         busy = false
         return
       }
       const policy = TOOL_POLICY[job.type] ?? 'none'
-      const text = await runAgent(`你是执行者。完成任务并输出结论，用中文，不超过 300 字。${policy === 'none' ? '不要调用工具。' : '可以调用需要的工具。'}任务：${job.title}`, { timeoutMs: policy === 'none' ? 90000 : 240000, tools: policy })
+      const hint = policy === 'none' ? '不要调用工具。' : (job.type === 'edit' ? '优先直接用 skills/shared/scripts 里的现成脚本（如 slideshow.py）和 ffmpeg 产出，不要长时间探索目录。' : '可以调用需要的工具。')
+      const text = await runAgent(`你是执行者。完成任务并输出结论，用中文，不超过 300 字。${hint}任务：${job.title}`, { timeoutMs: policy === 'none' ? 90000 : (job.type === 'edit' ? 600000 : 240000), tools: policy })
       job.state = 'done'; job.finishedAt = Date.now(); job.note = String(text).slice(0, 120); writeJson(jobsFile(), list)
       emitEvent('job.done', { id: job.id, title: job.title, jobType: job.type })
       record('agent', `完成：${job.title}`)
@@ -129,8 +146,20 @@ export function attachAgentd(ctx, runAgent, publishVideo) {
   }
 
   function latestVideo() {
-    const dir = join(ROOT, 'outputs', '_agentd', 'prod')
-    return existsSync(dir) ? null : null
+    const dir = join(ROOT, 'outputs')
+    let best = null
+    const walk = (d, depth) => {
+      if (depth > 4 || !existsSync(d)) return
+      for (const n of readdirSync(d)) {
+        if (n.startsWith('_') || n === 'node_modules') continue
+        const f = join(d, n); let st
+        try { st = statSync(f) } catch { continue }
+        if (st.isDirectory()) walk(f, depth + 1)
+        else if (/\.mp4$/i.test(n) && st.size > 100 * 1024) { if (!best || st.mtimeMs > best.mtime) best = { path: f.slice(ROOT.length + 1), mtime: st.mtimeMs } }
+      }
+    }
+    walk(dir, 0)
+    return best ? best.path : null
   }
 
   function resolveCard(cardId, action) {
@@ -142,7 +171,7 @@ export function attachAgentd(ctx, runAgent, publishVideo) {
     if (card.type === 'plan' && action === 'approve') approvePlan()
     if (card.type === 'plan' && action === 'reject') void generatePlan('用户打回了上一版计划，请换一种安排')
     if (card.type === 'approval' && action === 'approve') {
-      const video = (card.artifacts ?? []).find((a) => String(a).endsWith('.mp4'))
+      const video = (card.artifacts ?? []).find((a) => String(a).endsWith('.mp4')) ?? latestVideo()
       record('system', '发布已批准，开始提交抖音…')
       emitEvent('publish.start', { video })
       if (publishVideo) {
