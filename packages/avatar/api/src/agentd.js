@@ -66,9 +66,13 @@ export function attachAgentd(ctx, runAgent, publishVideo) {
       }
     } catch {}
     const prompt = [
-      '你是用户的常驻主编（24 小时在岗的数字员工）。请给出今天的计划。',
+      '你是「浩哥侃球」的常驻主编（24 小时在岗的数字员工）。',
+      /换|改|不要|别的|其他|主题|方向/.test(instruction)
+        ? '用户明确要求调整方向，请严格按用户要求排，不要强行回到 NBA。'
+        : '账号默认赛道是 NBA 篮球（抖音），只做 NBA 赛事/球星/交易/伤情/数据类内容，不要足球或无关主题。',
+      '请给出今天的计划。',
       `现在时间：${new Date().toLocaleString('zh-CN')}。所有时间必须从当前时间往后排，不要排已经过去的时间。`,
-      '要求：恰好 6–8 项；必须覆盖 topic/script/assets/edit/review/publish/sync/report 八类（可合并但至少 6 类）；每项写 why；review/publish 标 gate（review/approval）。',
+      /换|改|不要|别的|其他|主题|方向/.test(instruction) ? '要求：恰好 6–8 项；' : '要求：所有选题围绕 NBA；恰好 6–8 项；必须覆盖 topic/script/assets/edit/review/publish/sync/report 八类（可合并但至少 6 类）；每项写 why；review/publish 标 gate（review/approval）。',
       instruction ? `用户要求：${instruction}` : '',
       recent.length ? `最近执行记录：\n${recent}` : '',
       '只输出 JSON：{"summary":"一句话","rhythm":["节奏1"],"items":[{"time":"HH:MM","type":"topic","title":"...","why":"...","gate":"none"}]}',
@@ -169,7 +173,7 @@ export function attachAgentd(ctx, runAgent, publishVideo) {
     card.status = 'resolved'; card.resolution = { action, at: Date.now() }
     writeJson(cardsFile(), all)
     if (card.type === 'plan' && action === 'approve') approvePlan()
-    if (card.type === 'plan' && action === 'reject') void generatePlan('用户打回了上一版计划，请换一种安排')
+    if (card.type === 'plan' && action === 'reject') void generatePlan('用户打回了上一版计划，请换一个不同的选题方向，不要和上一版重复')
     if (card.type === 'approval' && action === 'approve') {
       const video = (card.artifacts ?? []).find((a) => String(a).endsWith('.mp4')) ?? latestVideo()
       record('system', '发布已批准，开始提交抖音…')

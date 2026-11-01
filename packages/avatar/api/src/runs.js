@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'node:path'
 
 const ROOT = process.env.AVATAR_ROOT ?? process.cwd()
+let installSelection = null
+export function setModelSelectionInstaller(fn) { installSelection = fn }
 const runsDir = () => join(ROOT, 'outputs', '_runs')
 
 function readState(id) {
@@ -32,7 +34,9 @@ export async function runAgentOnce(ctx, prompt, opts = {}) {
     presetId = (await presets.resolve(undefined)).id
     setup = async (agentCtx) => {
       await presets.mount(agentCtx, presetId)
+      try { if (installSelection) installSelection(agentCtx, { provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: opts.reasoningEffort ?? 'medium' }) } catch {}
       if (opts.tools === 'none') agentCtx.tools.restrict({ allow: [] })
+      else if (Array.isArray(opts.tools)) agentCtx.tools.restrict({ allow: opts.tools })
     }
   }
   let handle

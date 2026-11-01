@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, readdirSync, readFileSync, existsSync, statSync, createReadStream, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { spawn, execFileSync } from 'node:child_process'
-import { attachRuns, runAgentOnce } from './runs.js'
+import { attachRuns, runAgentOnce, setModelSelectionInstaller } from './runs.js'
+import { attachTasks } from './tasks.js'
 import { attachAgentd } from './agentd.js'
 import { sendText, parseText, tenantToken, uploadImage, uploadFile, sendPayload, sendCard, approvalCard } from './feishu.js'
 import { dashboardHtml } from './ui.js'
@@ -143,7 +144,12 @@ import { fileURLToPath } from 'node:url'
     const json = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
     if (pathname === '/api/chat/stream' && req.method === 'POST') { deps.chatStream(req, res); return }
     if (pathname === '/api/chat/stop' && req.method === 'POST') { deps.chatStop(req, res); return }
-    if (pathname.startsWith('/api/chat/last/')) { json(200, { status: 'done', text: '' }); return }
+    if (pathname.startsWith('/api/chat/last/')) {
+      const sid = decodeURIComponent(pathname.slice('/api/chat/last/'.length))
+      const hist = deps.history?.get?.(sid) ?? []
+      const last = [...hist].reverse().find((m) => m.role === 'assistant')
+      return json(200, { status: 'done', text: last?.text ?? '' })
+    }
     if (pathname.startsWith('/api/chat/jobs/')) {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
       res.write('id: 0\nevent: done\ndata: {}\n\n'); res.end(); return
@@ -396,7 +402,7 @@ export function apply(ctx) {
         if (existsSync(p)) parts.push(readFileSync(p, 'utf8'))
       }
     }
-    const head = '你是 Avatar 的主编（常驻数字员工），不是 Easel，也不是通用编程助手。你服务的账号是「浩哥侃球」（抖音 NBA 篮球解说）。你的工作：定选题、写脚本、做视频、发布、看数据、复盘。回答用中文，简洁、直接、像同事。'
+    const head = '你是 Avatar 的主编（常驻数字员工），不是 Easel，也不是通用编程助手。你服务的账号是「浩哥侃球」（抖音 NBA 篮球解说）。你的工作：定选题、写脚本、做视频、发布、看数据、复盘。回答用中文，简洁、直接、像同事。闲聊和简单问题直接用常识回答，不要调用工具；只有用户明确要求查证或需要外部事实时才用搜索/读取。'
     return [head, ...parts].join('\n\n')
   }
   function installPersona(agentCtx) {
@@ -411,7 +417,12 @@ export function apply(ctx) {
     let setup
     if (presets) {
       presetId = (await presets.resolve(undefined)).id
-      setup = async (agentCtx) => { await presets.mount(agentCtx, presetId); installPersona(agentCtx) }
+      setup = async (agentCtx) => {
+        await presets.mount(agentCtx, presetId)
+        installPersona(agentCtx)
+        try { if (installModelSelection) installModelSelection(agentCtx, { provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'medium' }) } catch {}
+        try { agentCtx.tools.restrict({ allow: ['read', 'glob', 'grep', 'web_search', 'web_fetch', 'skill', 'present'] }) } catch (e) { try { agentCtx.tools.restrict({ allow: [] }) } catch {} }
+      }
     }
     const live = ctx.agents.get?.(sid)
     if (live) { const h = { agent: live, dispose: async () => {} }; agents.set(sid, h); return h }
@@ -618,9 +629,20 @@ export function apply(ctx) {
         const payload = JSON.parse(b || '{}')
         const message = String(payload.message ?? '')
         const sid = String(payload.sessionId ?? '') || ('avatar-' + randomUUID())
+        if (/计划|今天.*(做|干|安排)|today/i.test(message)) {
+          const p = agentd.panel()
+          const text = p.plan ? `今日计划 v${p.plan.version}（${p.plan.status}）：\n` + p.plan.items.map((it) => `${it.time} ${it.title}`).join('\n') : '今天还没有计划，回复「生成计划」我就排一版。'
+          res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+          res.write(`id: 1\nevent: token\ndata: ${JSON.stringify(text)}\n\n`)
+          res.write(`id: 0\nevent: done\ndata: {"sessionKey":"${sid}"}\n\n`)
+          res.end()
+          return
+        }
         const handle = await ensureAgent(sid)
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+        res.write('id: 0\nevent: activity\ndata: "主编收到，正在处理…"\n\n')
         const set = subs.get(sid) ?? new Set(); subs.set(sid, set)
+        const hb = setInterval(() => { try { write(9, 'heartbeat', '主编处理中…') } catch {} }, 15000)
         let closed = false
         const guard = setTimeout(() => { if (!closed) { closed = true; try { write(0, 'error', '响应超时（可能卡在工具调用），请重发') } catch {} ; try { res.end() } catch {} } }, 6 * 60000)
         const finish = () => { if (!closed) { closed = true; clearTimeout(guard); write(0, 'done', { sessionKey: sid }); res.end() } }
@@ -641,7 +663,7 @@ export function apply(ctx) {
           }
         }
         set.add(fn)
-        res.on('close', () => { clearTimeout(guard); set.delete(fn) })
+        res.on('close', () => { clearTimeout(guard); clearInterval(hb); set.delete(fn) })
         const hist = history.get(sid) ?? []; hist.push({ role: 'user', text: message }); history.set(sid, hist)
         handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: message }], source: { kind: 'user' } })
       } catch (e) {
@@ -658,7 +680,7 @@ export function apply(ctx) {
     })
   }
 
-  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, feishuEvent, publishVideo, get feishuAppId() { return feishuAppId }, get feishuSecret() { return feishuSecret }, sendMedia, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
+  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, feishuEvent, publishVideo, get history() { return history }, get feishuAppId() { return feishuAppId }, get feishuSecret() { return feishuSecret }, sendMedia, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
 
 
   const stepsFile = () => join(ROOT, 'outputs', '_steps', '_all.jsonl')
@@ -755,41 +777,10 @@ export function apply(ctx) {
     }
   }
 
-  async function feishuHandleEvent(body) {
-    try { appendFileSync(join(ROOT, 'outputs', '_feishu', 'events.jsonl'), JSON.stringify({ ts: Date.now(), type: body?.type ?? body?.header?.event_type, hasMsg: Boolean(body?.event?.message), evType: body?.header?.event_type, content: String(body?.event?.message?.content ?? '').slice(0, 80) }) + '\n') } catch {}
-    try { const m = body?.event?.message; appendFileSync(join(ROOT, 'outputs', '_feishu', 'handler.log'), JSON.stringify({ ts: Date.now(), phase: 'raw', chat: m?.chat_id, mid: m?.message_id, text: parseText(m).slice(0, 30) }) + '\n') } catch (e) { try { appendFileSync('/tmp/feishu-diag.err', String(e) + '\n') } catch {} }
-    if (body?.type === 'url_verification') return { challenge: body.challenge }
-    if (body?.header?.event_type === 'card.action.trigger') {
-      const ev = body.event ?? {}
-      const val = ev.action?.value ?? {}
-      const chat = ev.context?.open_chat_id ?? ev.open_chat_id ?? ''
-      const act = String(val.action ?? '')
-      try {
-        if (act === 'approve_plan') { agentd.approvePlan(); if (chat) await sendText(feishuAppId(), feishuSecret(), chat, '✅ 计划已批准，开始执行') ; return { toast: { type: 'success', content: '已批准' } } }
-        if (act === 'reject_plan') { void agentd.generatePlan('用户打回了计划，请换一种安排'); if (chat) await sendText(feishuAppId(), feishuSecret(), chat, '已打回，正在重新生成计划') ; return { toast: { type: 'success', content: '已打回' } } }
-        if (act === 'approve' || act === 'reject') {
-          agentd.resolveCard(String(val.cardId ?? ''), act)
-          if (chat) await sendText(feishuAppId(), feishuSecret(), chat, act === 'approve' ? '✅ 已通过' : '↩️ 已打回')
-          return { toast: { type: 'success', content: act === 'approve' ? '已通过' : '已打回' } }
-        }
-      } catch (e) {
-        return { toast: { type: 'error', content: String(e?.message ?? e) } }
-      }
-      return {}
-    }
-    const ev = body?.event
-    const msg = ev?.message
-    if (!msg || body?.header?.event_type !== 'im.message.receive_v1') return {}
-    if (msg.message_id && feishuSeen.has(msg.message_id)) return {}
-    if (msg.message_id) { feishuSeen.add(msg.message_id); if (feishuSeen.size > 2000) feishuSeen.clear() }
-    if (String(msg.sender?.sender_type ?? '') === 'app') return {}
-    const chatId = msg.chat_id
-    if (chatId) { try { mkdirSync(join(ROOT, 'outputs', '_feishu'), { recursive: true }); writeFileSync(join(ROOT, 'outputs', '_feishu', 'chat.json'), JSON.stringify({ chatId, at: Date.now() })) } catch {} }
-    const text = parseText(msg)
-    if (!chatId || !text) return {}
-    void (async () => {
-      const flog = (o) => { try { appendFileSync(join(ROOT, 'outputs', '_feishu', 'handler.log'), JSON.stringify({ ts: Date.now(), ...o }) + '\n') } catch {} }
-      flog({ step: 'enter', text: text.slice(0, 40), chatId })
+  async function processFeishu(text, chatId) {
+    const flog = (o) => { try { appendFileSync(join(ROOT, 'outputs', '_feishu', 'handler.log'), JSON.stringify({ ts: Date.now(), ...o }) + '\n') } catch {} }
+    flog({ step: 'enter', text: text.slice(0, 40), chatId })
+            flog({ step: 'enter', text: text.slice(0, 40), chatId })
       try {
         const appId = feishuAppId(); const secret = feishuSecret()
         if (!appId || !secret) return
@@ -873,7 +864,49 @@ export function apply(ctx) {
         flog({ step: 'error', message: String(e?.message ?? e) })
         try { await sendText(feishuAppId(), feishuSecret(), chatId, `出错了：${String(e?.message ?? e)}`) } catch (e2) { flog({ step: 'send-error', message: String(e2?.message ?? e2) }) }
       }
-    })()
+  }
+
+  const feishuQueue = []
+  async function feishuWorker() {
+    const item = feishuQueue.shift()
+    if (!item) return
+    try { await processFeishu(item.text, item.chatId) } catch (e) { /* logged inside */ }
+  }
+
+  async function feishuHandleEvent(body) {
+    try { appendFileSync(join(ROOT, 'outputs', '_feishu', 'events.jsonl'), JSON.stringify({ ts: Date.now(), type: body?.type ?? body?.header?.event_type, hasMsg: Boolean(body?.event?.message), evType: body?.header?.event_type, content: String(body?.event?.message?.content ?? '').slice(0, 80) }) + '\n') } catch {}
+    try { const m = body?.event?.message; appendFileSync(join(ROOT, 'outputs', '_feishu', 'handler.log'), JSON.stringify({ ts: Date.now(), phase: 'raw', chat: m?.chat_id, mid: m?.message_id, text: parseText(m).slice(0, 30) }) + '\n') } catch (e) { try { appendFileSync('/tmp/feishu-diag.err', String(e) + '\n') } catch {} }
+    if (body?.type === 'url_verification') return { challenge: body.challenge }
+    if (body?.header?.event_type === 'card.action.trigger') {
+      const ev = body.event ?? {}
+      const val = ev.action?.value ?? {}
+      const chat = ev.context?.open_chat_id ?? ev.open_chat_id ?? ''
+      const act = String(val.action ?? '')
+      try {
+        if (act === 'approve_plan') { agentd.approvePlan(); if (chat) await sendText(feishuAppId(), feishuSecret(), chat, '✅ 计划已批准，开始执行') ; return { toast: { type: 'success', content: '已批准' } } }
+        if (act === 'reject_plan') { void agentd.generatePlan('用户打回了计划，请换一种安排'); if (chat) await sendText(feishuAppId(), feishuSecret(), chat, '已打回，正在重新生成计划') ; return { toast: { type: 'success', content: '已打回' } } }
+        if (act === 'approve' || act === 'reject') {
+          agentd.resolveCard(String(val.cardId ?? ''), act)
+          if (chat) await sendText(feishuAppId(), feishuSecret(), chat, act === 'approve' ? '✅ 已通过' : '↩️ 已打回')
+          return { toast: { type: 'success', content: act === 'approve' ? '已通过' : '已打回' } }
+        }
+      } catch (e) {
+        return { toast: { type: 'error', content: String(e?.message ?? e) } }
+      }
+      return {}
+    }
+    const ev = body?.event
+    const msg = ev?.message
+    if (!msg || body?.header?.event_type !== 'im.message.receive_v1') return {}
+    if (msg.message_id && feishuSeen.has(msg.message_id)) return {}
+    if (msg.message_id) { feishuSeen.add(msg.message_id); if (feishuSeen.size > 2000) feishuSeen.clear() }
+    if (String(msg.sender?.sender_type ?? '') === 'app') return {}
+    const chatId = msg.chat_id
+    if (chatId) { try { mkdirSync(join(ROOT, 'outputs', '_feishu'), { recursive: true }); writeFileSync(join(ROOT, 'outputs', '_feishu', 'chat.json'), JSON.stringify({ chatId, at: Date.now() })) } catch {} }
+    const text = parseText(msg)
+    if (!chatId || !text) return {}
+    feishuQueue.push({ text, chatId })
+    return {}
     return {}
   }
 
@@ -938,6 +971,9 @@ export function apply(ctx) {
   }
 
   ctx.effect(() => { const t = setInterval(() => { void pushEvents() }, 10000); return () => clearInterval(t) })
+  ctx.effect(() => { const t = setInterval(() => { void feishuWorker() }, 500); return () => clearInterval(t) })
+  if (installModelSelection) setModelSelectionInstaller(installModelSelection)
+  const tasks = attachTasks((prompt, opts) => runAgentOnce(ctx, prompt, opts ?? {}))
   const runs = attachRuns(ctx, getTemplate)
   const agentd = attachAgentd(ctx, (prompt) => runAgentOnce(ctx, prompt), publishVideo)
   ctx.effect(() => { const t = setInterval(() => { try { agentd.tick() } catch {} }, 15000); return () => clearInterval(t) })
@@ -1126,6 +1162,19 @@ export function apply(ctx) {
         return
       }
       if (u.pathname === '/api/feishu/health') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, appId: Boolean(feishuAppId()) })); return }
+      if (u.pathname === '/api/avatar/execute' && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c })
+        req.on('end', async () => {
+          try { const body = JSON.parse(b || '{}'); const t = await tasks.start(String(body.request ?? '')); res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(t)) }
+          catch (e) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ detail: String(e?.message ?? e) })) }
+        })
+        return
+      }
+      if (u.pathname === '/api/avatar/tasks') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ tasks: tasks.list().slice(0, 20) })); return }
+      if (u.pathname.startsWith('/api/avatar/tasks/')) {
+        const t = tasks.get(u.pathname.slice('/api/avatar/tasks/'.length))
+        res.writeHead(t ? 200 : 404, { 'content-type': 'application/json' }); res.end(JSON.stringify(t ?? { detail: '任务不存在' })); return
+      }
       if (u.pathname === '/api/avatar/agentd/panel') {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify(agentd.panel()))
