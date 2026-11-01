@@ -3,7 +3,7 @@ import { appendFileSync, readdirSync, readFileSync, existsSync, statSync, create
 import { spawn } from 'node:child_process'
 import { attachRuns, runAgentOnce } from './runs.js'
 import { attachAgentd } from './agentd.js'
-import { sendText, parseText, tenantToken, uploadImage, uploadFile, sendPayload } from './feishu.js'
+import { sendText, parseText, tenantToken, uploadImage, uploadFile, sendPayload, sendCard, approvalCard } from './feishu.js'
 import { dashboardHtml } from './ui.js'
 import { join } from 'node:path'
 
@@ -413,12 +413,19 @@ export function apply(ctx) {
       presetId = (await presets.resolve(undefined)).id
       setup = async (agentCtx) => { await presets.mount(agentCtx, presetId); installPersona(agentCtx) }
     }
-    handle = await ctx.agents.create({
-      sessionId: sid,
-      agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
-      meta: { cwd: process.cwd(), ...(presetId ? { agentPreset: presetId } : {}) },
-      ...(setup ? { setup } : {}),
-    })
+    const live = ctx.agents.get?.(sid)
+    if (live) { const h = { agent: live, dispose: async () => {} }; agents.set(sid, h); return h }
+    try {
+      handle = await ctx.agents.create({
+        sessionId: sid,
+        agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+        meta: { cwd: process.cwd(), ...(presetId ? { agentPreset: presetId } : {}) },
+        ...(setup ? { setup } : {}),
+      })
+    } catch (e) {
+      if (!/already exists/i.test(String(e?.message ?? e))) throw e
+      handle = await ctx.agents.resume({ resumeSessionId: sid, agentOptions: { provider: 'deepseek-official', model: 'deepseek-v4-flash' }, ...(setup ? { setup } : {}) })
+    }
     agents.set(sid, handle)
     return handle
   }
@@ -738,6 +745,24 @@ export function apply(ctx) {
     try { appendFileSync(join(ROOT, 'outputs', '_feishu', 'events.jsonl'), JSON.stringify({ ts: Date.now(), type: body?.type ?? body?.header?.event_type, hasMsg: Boolean(body?.event?.message), evType: body?.header?.event_type, content: String(body?.event?.message?.content ?? '').slice(0, 80) }) + '\n') } catch {}
     try { const m = body?.event?.message; appendFileSync(join(ROOT, 'outputs', '_feishu', 'handler.log'), JSON.stringify({ ts: Date.now(), phase: 'raw', chat: m?.chat_id, mid: m?.message_id, text: parseText(m).slice(0, 30) }) + '\n') } catch (e) { try { appendFileSync('/tmp/feishu-diag.err', String(e) + '\n') } catch {} }
     if (body?.type === 'url_verification') return { challenge: body.challenge }
+    if (body?.header?.event_type === 'card.action.trigger') {
+      const ev = body.event ?? {}
+      const val = ev.action?.value ?? {}
+      const chat = ev.context?.open_chat_id ?? ev.open_chat_id ?? ''
+      const act = String(val.action ?? '')
+      try {
+        if (act === 'approve_plan') { agentd.approvePlan(); if (chat) await sendText(feishuAppId(), feishuSecret(), chat, '✅ 计划已批准，开始执行') ; return { toast: { type: 'success', content: '已批准' } } }
+        if (act === 'reject_plan') { void agentd.generatePlan('用户打回了计划，请换一种安排'); if (chat) await sendText(feishuAppId(), feishuSecret(), chat, '已打回，正在重新生成计划') ; return { toast: { type: 'success', content: '已打回' } } }
+        if (act === 'approve' || act === 'reject') {
+          agentd.resolveCard(String(val.cardId ?? ''), act)
+          if (chat) await sendText(feishuAppId(), feishuSecret(), chat, act === 'approve' ? '✅ 已通过' : '↩️ 已打回')
+          return { toast: { type: 'success', content: act === 'approve' ? '已通过' : '已打回' } }
+        }
+      } catch (e) {
+        return { toast: { type: 'error', content: String(e?.message ?? e) } }
+      }
+      return {}
+    }
     const ev = body?.event
     const msg = ev?.message
     if (!msg || body?.header?.event_type !== 'im.message.receive_v1') return {}
@@ -771,6 +796,19 @@ export function apply(ctx) {
           const p = agentd.panel()
           const lines = [`模式：${p.mode}`, `计划：${p.plan ? `v${p.plan.version} ${p.plan.status}` : '无'}`, ...(p.plan?.items ?? []).slice(0, 6).map((it) => `${it.time} ${it.title}`), `待确认卡片：${p.cards.length}`]
           await sendText(appId, secret, chatId, lines.join('\n'))
+          if (p.cards.length) {
+            const card = approvalCard('待确认事项', p.cards.map((c) => `**${c.title}**\n${String(c.body ?? '').slice(0, 80)}`).join('\n\n'), p.cards.flatMap((c) => [
+              { label: '通过', type: 'primary', value: { action: 'approve', cardId: c.id } },
+              { label: '打回', type: 'danger', value: { action: 'reject', cardId: c.id } },
+            ]))
+            await sendCard(appId, secret, chatId, card)
+          }
+          if (p.plan && p.plan.status === 'draft') {
+            await sendCard(appId, secret, chatId, approvalCard('计划待批准', p.plan.summary ?? '', [
+              { label: '批准计划', type: 'primary', value: { action: 'approve_plan' } },
+              { label: '打回重排', type: 'danger', value: { action: 'reject_plan' } },
+            ]))
+          }
           return
         }
         if (/^(计划|plan)$/i.test(text)) {

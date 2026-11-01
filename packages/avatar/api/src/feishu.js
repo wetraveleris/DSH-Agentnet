@@ -70,3 +70,18 @@ export async function sendPayload(appId, appSecret, chatId, msgType, content) {
   if (d.code !== 0) throw new Error(`发送失败：${d.code} ${d.msg}`)
   return d.data
 }
+
+export async function sendCard(appId, appSecret, chatId, card) {
+  return sendPayload(appId, appSecret, chatId, 'interactive', card)
+}
+
+export function approvalCard(title, body, buttons) {
+  return {
+    config: { wide_screen_mode: true },
+    header: { template: 'blue', title: { tag: 'plain_text', content: title } },
+    elements: [
+      { tag: 'div', text: { tag: 'lark_md', content: body } },
+      { tag: 'action', actions: buttons.map((b) => ({ tag: 'button', text: { tag: 'plain_text', content: b.label }, type: b.type ?? 'default', value: b.value })) },
+    ],
+  }
+}
