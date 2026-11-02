@@ -16,7 +16,12 @@ function isBuildFaceClient(value: unknown): boolean {
 export default defineConfig(({ env }) => {
   const client = isBuildFaceClient(env?.DSH_BUILD_FACE)
   return {
-    workspace: ['vendor/*', 'packages/*/*', 'apps/cli'],
+    // packages/avatar/* are plain-JavaScript profile plugins with their own copy
+    // build scripts; they carry no TypeScript sources for this workspace build.
+    workspace: {
+      include: ['vendor/*', 'packages/*/*', 'apps/cli'],
+      exclude: ['**/node_modules/**', '**/dist/**', '**/test?(s)/**', '**/t?(e)mp/**', 'packages/avatar/*'],
+    },
     entry: client ? '' : ['lib/types/{index,invariant,startup}.js'],
     outDir: 'lib',
     format: ['esm'],
