@@ -680,7 +680,7 @@ export function apply(ctx) {
     })
   }
 
-  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, feishuEvent, publishVideo, get startTask() { return tasks.start }, get getTask() { return tasks.get }, get history() { return history }, get feishuAppId() { return feishuAppId }, get feishuSecret() { return feishuSecret }, sendMedia, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
+  const deps = { get agentd() { return agentd }, chatStream, chatStop, readLoginStatus, startLogin, startWhoami, loginDir, fetchAccountStats, feishuEvent, publishVideo, makeVideo, get startTask() { return tasks.start }, get getTask() { return tasks.get }, get history() { return history }, get feishuAppId() { return feishuAppId }, get feishuSecret() { return feishuSecret }, sendMedia, diagnose, propose, listProposals, applyProposal, usageSummary, stepsSummary, snapshotTemplate, listTemplateVersions, get runs() { return runs } }
 
 
   const stepsFile = () => join(ROOT, 'outputs', '_steps', '_all.jsonl')
@@ -866,6 +866,17 @@ export function apply(ctx) {
           try { agentd.resolveCard(m[2], m[1] === '通过' ? 'approve' : 'reject'); await sendText(appId, secret, chatId, `已${m[1]}：${m[2]}`) } catch (e) { await sendText(appId, secret, chatId, `操作失败：${String(e?.message ?? e)}`) }
           return
         }
+        const mv = /^(做视频|生成视频|口播视频|视频)[:：]\s*(.+)$/.exec(text)
+        if (mv) {
+          await sendText(appId, secret, chatId, '开始生成视频（配音+字卡），约 1–2 分钟…')
+          const r = await makeVideo({ text: mv[2], title: mv[2].slice(0, 12) })
+          if (!r.ok) { await sendText(appId, secret, chatId, `生成失败：${r.message}`); return }
+          try {
+            await sendMedia(appId, secret, chatId, 'video', 1)
+            await sendText(appId, secret, chatId, `✅ 视频已生成：${r.duration}s（${r.out.split('/').pop()}）`)
+          } catch (e) { await sendText(appId, secret, chatId, `视频已生成但发送失败：${String(e?.message ?? e)}`) }
+          return
+        }
         // 任务型需求：自动编排
         if (debsTask(text)) {
           const t = await deps.startTask(text)
@@ -910,6 +921,25 @@ export function apply(ctx) {
     const item = feishuQueue.shift()
     if (!item) return
     try { await processFeishu(item.text, item.chatId) } catch (e) { /* logged inside */ }
+  }
+
+
+  function makeVideo(opts) {
+    return new Promise((resolve) => {
+      const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'shortvideo.py')
+      if (!existsSync(script)) return resolve({ ok: false, message: '缺少 shortvideo.py' })
+      const out = String(opts.out ?? join(ROOT, 'outputs', 'auto', `short-${Date.now()}.mp4`))
+      const py = process.env.PYTHON ?? 'python3'
+      mkdirSync(dirname(out), { recursive: true })
+      const child = spawn(py, [script, '--text', String(opts.text ?? ''), '--out', out, '--title', String(opts.title ?? '')], { cwd: ROOT, env: process.env })
+      let outTxt = ''
+      child.stdout.on('data', (d) => { outTxt += d }); child.stderr.on('data', (d) => { outTxt += d })
+      child.on('close', (code) => {
+        let info = {}
+        try { info = JSON.parse(outTxt.trim().split('\n').pop() ?? '{}') } catch {}
+        resolve({ ok: code === 0, out: info.out ?? out, duration: info.duration ?? 0, message: code === 0 ? '' : outTxt.slice(-400) })
+      })
+    })
   }
 
   async function feishuHandleEvent(body) {
@@ -1201,6 +1231,14 @@ export function apply(ctx) {
         return
       }
       if (u.pathname === '/api/feishu/health') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, appId: Boolean(feishuAppId()) })); return }
+      if (u.pathname === '/api/avatar/make-video' && req.method === 'POST') {
+        let b = ''; req.on('data', (c) => { b += c })
+        req.on('end', async () => {
+          try { const body = JSON.parse(b || '{}'); const r = await makeVideo(body); res.writeHead(r.ok ? 200 : 500, { 'content-type': 'application/json' }); res.end(JSON.stringify(r)) }
+          catch (e) { res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ detail: String(e?.message ?? e) })) }
+        })
+        return
+      }
       if (u.pathname === '/api/avatar/execute' && req.method === 'POST') {
         let b = ''; req.on('data', (c) => { b += c })
         req.on('end', async () => {
